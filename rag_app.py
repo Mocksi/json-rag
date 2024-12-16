@@ -219,21 +219,40 @@ def chat_loop(conn):
         except Exception as e:
             print("Error processing query:", str(e))
 
+def reset_database(conn):
+    print("Warning: This will delete all stored embeddings and metadata.")
+    confirmation = input("Are you sure you want to reset the database? (yes/no): ")
+    if confirmation.lower() != 'yes':
+        print("Database reset cancelled.")
+        return
+    
+    print("Resetting database...")
+    cur = conn.cursor()
+    cur.execute("""
+        BEGIN;
+          TRUNCATE TABLE json_chunks CASCADE;
+          TRUNCATE TABLE file_metadata CASCADE;
+          TRUNCATE TABLE schema_evolution CASCADE;
+        COMMIT;
+    """)
+    print("Database reset complete.")
+
 def main():
     conn = psycopg2.connect(POSTGRES_CONN_STR)
     try:
+        # Initial load/embedding
         load_and_embed_new_data(conn)
         
         if len(sys.argv) > 1:
-            parser = argparse.ArgumentParser(description="Query the JSON-based RAG system.")
-            parser.add_argument("--question", "-q", type=str, help="The user's question about the JSON data.")
+            parser = argparse.ArgumentParser(description="JSON-based RAG system.")
+            parser.add_argument("--new", action="store_true", help="Reset the database (clear all data)")
             args = parser.parse_args()
             
-            if args.question:
-                response = answer_query(conn, args.question)
-                print("Answer:", response)
-                return
+            if args.new:
+                reset_database(conn)
+                load_and_embed_new_data(conn)  # Reload data after reset
 
+        # Start interactive chat
         chat_loop(conn)
         
     finally:
