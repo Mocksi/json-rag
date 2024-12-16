@@ -79,24 +79,187 @@ def get_files_to_process(conn):
                 to_process.append((f, f_hash, f_mtime))
     return to_process
 
-def json_to_path_chunks(json_obj, current_path="$"):
+def create_enhanced_chunk(path, value, context=None, entities=None):
+    """Create an enhanced text chunk with path, type, value, and related context."""
+    val_type = type(value).__name__
+    
+    # Handle different value types appropriately
+    if isinstance(value, dict):
+        val_str = json.dumps({k: str(v) if not isinstance(v, (dict, list)) else "..." 
+                            for k, v in value.items()}, indent=2)
+    elif isinstance(value, list):
+        val_str = f"Array with {len(value)} items"
+    else:
+        val_str = str(value)
+    
+    # Build context information
+    context_info = []
+    if context:
+        context_str = {k: str(v) if not isinstance(v, (dict, list)) else "..."
+                      for k, v in context.items()}
+        context_info.append(f"Context: {json.dumps(context_str, indent=2)}")
+    
+    # Add related entities if they exist
+    related_entities = []
+    if entities:
+        for entity_id, info in entities.items():
+            entity_path = info['path']
+            if path.startswith(entity_path) or entity_path.startswith(path):
+                related_entities.append(f"Related Entity: {info['type']}={entity_id}")
+                # Add entity context if available
+                if info.get('context'):
+                    entity_context = {k: str(v) for k, v in info['context'].items() 
+                                   if k != info['type']}
+                    related_entities.append(f"Entity Context: {json.dumps(entity_context, indent=2)}")
+    
+    # Break path into hierarchical contexts
+    path_contexts = []
+    path_parts = path.split('.')
+    current_context = "$"
+    for part in path_parts[1:]:  # Skip the root $
+        current_context = f"{current_context}.{part}"
+        if context and current_context in context:
+            path_contexts.append(f"Parent Path: {current_context}")
+            path_contexts.append(f"Parent Context: {json.dumps(context[current_context], indent=2)}")
+    
+    # Combine all components
+    chunk_parts = [
+        f"Path: {path}",
+        f"Type: {val_type}",
+        f"Value: {val_str}"
+    ]
+    
+    if path_contexts:
+        chunk_parts.extend(path_contexts)
+    if context_info:
+        chunk_parts.extend(context_info)
+    if related_entities:
+        chunk_parts.extend(related_entities)
+    
+    return "\n".join(chunk_parts)
+
+def json_to_path_chunks(json_obj, current_path="$", entities=None, parent_context=None, path_contexts=None):
     chunks = []
+    if path_contexts is None:
+        path_contexts = {}
+    
     if isinstance(json_obj, dict):
+        # Store context for this path
+        path_contexts[current_path] = {k: str(v) if not isinstance(v, (dict, list)) else "..."
+                                     for k, v in json_obj.items()}
+        
+        # Create chunk for the entire object with its context
+        chunks.append(create_enhanced_chunk(
+            current_path, 
+            json_obj,
+            context=path_contexts,
+            entities=entities
+        ))
+        
+        # Process individual fields
         for key, value in json_obj.items():
             seen_keys.add(key)
             new_path = f"{current_path}.{key}"
-            chunks.extend(json_to_path_chunks(value, current_path=new_path))
+            chunks.extend(json_to_path_chunks(
+                value,
+                current_path=new_path,
+                entities=entities,
+                parent_context=json_obj,
+                path_contexts=path_contexts
+            ))
+            
     elif isinstance(json_obj, list):
         seen_keys.add(current_path + "[]")
         for i, item in enumerate(json_obj):
             new_path = f"{current_path}[{i}]"
-            chunks.extend(json_to_path_chunks(item, current_path=new_path))
+            chunks.extend(json_to_path_chunks(
+                item,
+                current_path=new_path,
+                entities=entities,
+                parent_context=parent_context,
+                path_contexts=path_contexts
+            ))
     else:
-        val_type = type(json_obj).__name__
-        val_str = str(json_obj)
-        text_representation = f"Path: {current_path}\nType: {val_type}\nValue: {val_str}"
-        chunks.append(text_representation)
+        chunks.append(create_enhanced_chunk(
+            current_path,
+            json_obj,
+            context=path_contexts,
+            entities=entities
+        ))
+    
     return chunks
+
+def track_entity_relationships(json_obj, current_path="$", parent_context=None):
+    """Track relationships between entities with enhanced context"""
+    relationships = []
+    
+    def process_node(node, path, context):
+        if isinstance(node, dict):
+            # Track entities with their types and relationships
+            entity_types = {
+                'name': 'person',
+                'id': 'identifier',
+                'title': 'document',
+                'key': 'reference',
+                'uuid': 'unique_id',
+                'email': 'contact'
+            }
+            
+            found_entity = {}
+            for key, entity_type in entity_types.items():
+                if key in node:
+                    found_entity['type'] = entity_type
+                    found_entity['value'] = node[key]
+                    found_entity['path'] = path
+                    found_entity['context'] = {k: v for k, v in node.items() if k != key}
+                    break
+            
+            if found_entity:
+                # Look for relationships in the path
+                path_parts = path.split('.')
+                for i, part in enumerate(path_parts):
+                    if part in ['member', 'owner', 'participant', 'author', 'assignee']:
+                        found_entity['role'] = part
+                    elif part in ['project', 'team', 'organization', 'department']:
+                        found_entity['group_type'] = part
+                        if i > 0:
+                            found_entity['group_context'] = path_parts[i-1]
+                
+                relationships.append(found_entity)
+            
+            # Recursively process all dictionary values
+            for key, value in node.items():
+                new_path = f"{path}.{key}"
+                new_context = {**context} if context else {}
+                new_context.update({k: v for k, v in node.items() if not isinstance(v, (dict, list))})
+                process_node(value, new_path, new_context)
+                
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                new_path = f"{path}[{i}]"
+                process_node(item, new_path, context)
+    
+    process_node(json_obj, current_path, parent_context)
+    return relationships
+
+def extract_entities(json_obj, current_path="$"):
+    """Enhanced entity extraction with relationship tracking"""
+    entities = {}
+    relationships = track_entity_relationships(json_obj, current_path)
+    
+    for rel in relationships:
+        entity_id = str(rel.get('value'))
+        if entity_id:
+            entities[entity_id] = {
+                'path': rel['path'],
+                'type': rel['type'],
+                'context': rel.get('context', {}),
+                'role': rel.get('role'),
+                'group_type': rel.get('group_type'),
+                'group_context': rel.get('group_context')
+            }
+    
+    return entities
 
 def load_and_embed_new_data(conn):
     to_process = get_files_to_process(conn)
@@ -107,21 +270,60 @@ def load_and_embed_new_data(conn):
     print(f"Processing {len(to_process)} new or modified files...")
     
     documents = []
+    entities_by_file = {}
+    
     for f, f_hash, f_mtime in to_process:
         try:
             with open(f, 'r', encoding='utf-8') as file:
                 data = json.load(file)
                 validated = FlexibleModel.parse_obj(data)
                 documents.append((f, f_hash, f_mtime, validated.__root__))
+                entities = extract_entities(validated.__root__)
+                entities_by_file[f] = entities
+                
+                # Print detailed entity and relationship information
+                if entities:
+                    print(f"\nEntities and relationships in {f}:")
+                    for entity_id, info in entities.items():
+                        print(f"\nEntity: {entity_id}")
+                        print(f"Type: {info['type']}")
+                        print(f"Path: {info['path']}")
+                        if info.get('role'):
+                            print(f"Role: {info['role']}")
+                        if info.get('group_type'):
+                            print(f"Group: {info['group_type']}")
+                            if info.get('group_context'):
+                                print(f"Group Context: {info['group_context']}")
+                        if info.get('context'):
+                            print("Context:")
+                            for k, v in info['context'].items():
+                                print(f"  {k}: {v}")
+                
                 print(f"Validated document: {f}")
         except (ValidationError, json.JSONDecodeError) as e:
             print(f"Skipping invalid JSON document {f}:", e)
 
     print(f"Successfully validated {len(documents)} documents")
+    
+    # Print entity summary for each file
+    for f, entities in entities_by_file.items():
+        if entities:
+            print(f"\nEntities found in {f}:")
+            for entity_id, info in entities.items():
+                print(f"  - {info['type']}={entity_id} at {info['path']}")
+                if info.get('context'):
+                    context_summary = {k: str(v) for k, v in info['context'].items() 
+                                    if k != info['type']}
+                    print(f"    Context: {json.dumps(context_summary, indent=2)}")
 
     all_chunks = []
+    seen_keys.clear()
     for (f, f_hash, f_mtime, doc) in documents:
-        doc_chunks = json_to_path_chunks(doc)
+        doc_chunks = json_to_path_chunks(
+            doc,
+            entities=entities_by_file.get(f),
+            parent_context=None
+        )
         all_chunks.extend((f, chunk) for chunk in doc_chunks)
 
     if not all_chunks:
@@ -175,6 +377,13 @@ def get_relevant_chunks(conn, query, top_k=5):
 def build_prompt(user_query, retrieved_chunks):
     context_str = "\n\n".join(retrieved_chunks)
     prompt = f"""You are a helpful assistant. Use the provided context to answer the user's query.
+
+Guidelines:
+- Use specific names and identifiers from the context
+- Reference exact paths when relevant
+- If multiple similar items exist, distinguish them clearly
+- If the answer isn't in the context, say so
+- Maintain the relationships between entities as shown in the context
 
 Context:
 {context_str}
