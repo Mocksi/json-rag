@@ -346,6 +346,90 @@ def extract_entities(json_obj, current_path="$"):
     
     return entities
 
+def index_chunk_keys(conn, chunk_id, chunk_text):
+    """
+    Index key-value pairs from chunk text for hybrid retrieval.
+    
+    Args:
+        conn: PostgreSQL database connection
+        chunk_id (str): Unique identifier for the chunk
+        chunk_text (str): Text content of the chunk
+    """
+    # Extract key-value pairs from chunk_text if present
+    extracted_pairs = extract_key_value_pairs(chunk_text)
+    cur = conn.cursor()
+    for k, v in extracted_pairs.items():
+        cur.execute("""
+            INSERT INTO chunk_keys_index (key_name, key_value, chunk_id)
+            VALUES (%s, %s, %s)
+        """, (k, v, chunk_id))
+
+def hybrid_retrieval(conn, query, top_k=5):
+    """
+    Perform hybrid retrieval using both keyword filters and vector similarity.
+    
+    Args:
+        conn: PostgreSQL database connection
+        query (str): User's query
+        top_k (int): Number of results to return
+        
+    Returns:
+        list: Retrieved chunks filtered by keywords and ranked by vector similarity
+    """
+    filters = extract_filters_from_query(query)
+    
+    filtered_chunk_ids = None
+    if filters:
+        cur = conn.cursor()
+        conditions = " AND ".join([f"(key_name=%s AND key_value=%s)" for _ in filters.items()])
+        params = []
+        for k, v in filters.items():
+            params.extend([k, v])
+        sql = f"SELECT chunk_id FROM chunk_keys_index WHERE {conditions}"
+        cur.execute(sql, tuple(params))
+        filtered_chunk_ids = [r[0] for r in cur.fetchall()]
+
+    return vector_search_with_filter(conn, query, filtered_chunk_ids, top_k)
+
+def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
+    """
+    Perform vector similarity search with optional ID filtering.
+    
+    Args:
+        conn: PostgreSQL database connection
+        query (str): Search query
+        allowed_chunk_ids (list): List of chunk IDs to consider, or None for all
+        top_k (int): Number of results to return
+        
+    Returns:
+        list: Retrieved chunks ordered by vector similarity
+    """
+    query_embedding = embedding_model.encode([query])[0]
+    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+    cur = conn.cursor()
+    if allowed_chunk_ids and len(allowed_chunk_ids) > 0:
+        format_ids = ",".join(["%s"] * len(allowed_chunk_ids))
+        sql = f"""
+        SELECT chunk_text
+        FROM json_chunks
+        WHERE id IN ({format_ids})
+        ORDER BY embedding <-> '{embedding_str}'
+        LIMIT {top_k};
+        """
+        cur.execute(sql, tuple(allowed_chunk_ids))
+    else:
+        sql = f"""
+        SELECT chunk_text
+        FROM json_chunks
+        ORDER BY embedding <-> '{embedding_str}'
+        LIMIT {top_k};
+        """
+        cur.execute(sql)
+
+    results = cur.fetchall()
+    return [r[0] for r in results]
+
 def load_and_embed_new_data(conn):
     """
     Load new or modified files, process them, and store embeddings.
@@ -443,6 +527,8 @@ def load_and_embed_new_data(conn):
             VALUES (%s, %s, %s)
             ON CONFLICT (id) DO NOTHING;
         """, (chunk_id, text, embedding_str))
+        # Index keys from this chunk
+        index_chunk_keys(conn, chunk_id, text)
 
     conn.commit()
     print(f"Embedded {len(all_chunks)} new chunks.")
@@ -508,23 +594,90 @@ Question: {user_query}
 Only use the provided context to answer."""
     return prompt
 
-def answer_query(conn, query):
+def summarize_chunks(chunks):
     """
-    Process a user query and generate an answer using RAG.
+    Summarize a list of chunks into a shorter context.
+    
+    Args:
+        chunks (list): List of text chunks to summarize
+        
+    Returns:
+        str: Condensed summary of the chunks
+    """
+    prompt = "Summarize these chunks of context:\n\n" + "\n\n".join(chunks)
+    completion = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+          {"role": "system", "content": "You summarize text while preserving key entities and relationships."},
+          {"role": "user", "content": prompt}
+        ],
+        temperature=0.0,
+        max_tokens=300
+    )
+    return completion.choices[0].message.content.strip()
+
+def hierarchical_retrieval(conn, query, top_k=20):
+    """
+    Perform hierarchical retrieval with automatic summarization.
+    
+    Args:
+        conn: PostgreSQL database connection
+        query (str): User's query
+        top_k (int): Initial number of chunks to retrieve
+        
+    Returns:
+        list: Either original chunks or summarized versions if too many
+    """
+    # Start by retrieving top_k chunks
+    initial_chunks = get_relevant_chunks(conn, query, top_k=top_k)
+    
+    # If initial_chunks > MAX_CHUNKS, summarize in batches
+    if len(initial_chunks) > MAX_CHUNKS:
+        batch_size = MAX_CHUNKS
+        summaries = []
+        for i in range(0, len(initial_chunks), batch_size):
+            batch = initial_chunks[i:i+batch_size]
+            summary = summarize_chunks(batch)
+            summaries.append(summary)
+            
+        # Now summarize the summaries if needed
+        while len(summaries) > MAX_CHUNKS:
+            # Summarize again
+            new_summaries = []
+            for i in range(0, len(summaries), batch_size):
+                batch = summaries[i:i+batch_size]
+                summary = summarize_chunks(batch)
+                new_summaries.append(summary)
+            summaries = new_summaries
+            
+        # At the end, summaries list is small enough
+        return summaries
+    else:
+        return initial_chunks
+
+def answer_query_with_hierarchy(conn, query):
+    """
+    Answer query using hierarchical retrieval and summarization.
     
     Args:
         conn: PostgreSQL database connection
         query (str): User's question
         
     Returns:
-        str: Generated answer based on retrieved context
+        str: Generated answer based on retrieved and potentially summarized context
     """
-    retrieved_chunks = get_relevant_chunks(conn, query)
-    if len(retrieved_chunks) > MAX_CHUNKS:
-        retrieved_chunks = retrieved_chunks[:MAX_CHUNKS]
-
-    prompt = build_prompt(query, retrieved_chunks)
+    # Use hierarchical retrieval if needed
+    chunks_or_summaries = hierarchical_retrieval(conn, query)
     
+    # If we end up with multiple summaries, just join them
+    if len(chunks_or_summaries) > MAX_CHUNKS:
+        # Summarize again
+        final_summary = summarize_chunks(chunks_or_summaries)
+        chunks = [final_summary]
+    else:
+        chunks = chunks_or_summaries
+
+    prompt = build_prompt(query, chunks)
     completion = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -534,7 +687,6 @@ def answer_query(conn, query):
         temperature=0.0,
         max_tokens=300
     )
-    
     return completion.choices[0].message.content.strip()
 
 def chat_loop(conn):
@@ -543,8 +695,6 @@ def chat_loop(conn):
     
     Args:
         conn: PostgreSQL database connection
-        
-    Handles user input/output and query processing until exit.
     """
     print("Enter your queries below. Type ':quit' to exit.")
     while True:
@@ -556,7 +706,7 @@ def chat_loop(conn):
         load_and_embed_new_data(conn)
 
         try:
-            answer = answer_query(conn, user_input)
+            answer = answer_query_with_hierarchy(conn, user_input)
             print("Assistant:", answer)
         except Exception as e:
             print("Error processing query:", str(e))
@@ -586,6 +736,63 @@ def reset_database(conn):
         COMMIT;
     """)
     print("Database reset complete.")
+
+def extract_filters_from_query(query):
+    """
+    Extract filter conditions from a user query.
+    
+    Args:
+        query (str): User's query string
+        
+    Returns:
+        dict: Dictionary of extracted filters (key-value pairs)
+        
+    Example:
+        "Show projects in department=Engineering" -> {"department": "Engineering"}
+    """
+    filters = {}
+    tokens = query.split()
+    for token in tokens:
+        if "=" in token:
+            k, v = token.split("=", 1)
+            filters[k.strip()] = v.strip()
+    return filters
+
+def extract_key_value_pairs(chunk_text):
+    """
+    Extract key-value pairs from chunk text for indexing.
+    
+    Args:
+        chunk_text (str): Text content of the chunk
+        
+    Returns:
+        dict: Dictionary of extracted key-value pairs
+        
+    Example:
+        "Path: $.org\nType: dict\nValue: {\"department\": \"Engineering\"}"
+        -> {"department": "Engineering"}
+    """
+    pairs = {}
+    lines = chunk_text.split('\n')
+    
+    # Extract from structured fields
+    for line in lines:
+        if ': ' in line:
+            key, value = line.split(': ', 1)
+            pairs[key.strip()] = value.strip()
+            
+    # Look for JSON-like structures
+    try:
+        for line in lines:
+            if line.startswith('Value: {'):
+                json_str = line[7:]  # Remove "Value: "
+                data = json.loads(json_str)
+                if isinstance(data, dict):
+                    pairs.update(data)
+    except json.JSONDecodeError:
+        pass
+        
+    return pairs
 
 def main():
     """

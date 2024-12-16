@@ -7,14 +7,15 @@ A tool for efficiently loading and integrating nested JSON data structures into 
 
 ## Overview
 
-This project provides utilities for processing hierarchical JSON data and preparing it for use in RAG applications. It features advanced entity tracking, relationship mapping, and context preservation, making it ideal for complex organizational data structures.
+This project provides utilities for processing hierarchical JSON data and preparing it for use in RAG applications. It features advanced entity tracking, relationship mapping, hybrid retrieval, and hierarchical summarization.
 
 ## Features
 
 * Advanced entity tracking and relationship mapping
 * Hierarchical context preservation in chunks
 * Path-aware chunking strategy
-* Intelligent entity relationship detection
+* Hybrid retrieval (vector + keyword filtering)
+* Hierarchical summarization for large contexts
 * Schema evolution tracking
 * Secure API key management
 * PostgreSQL vector storage
@@ -52,6 +53,20 @@ python rag_app.py --new
 
 Type `:quit` to exit the chat.
 
+## Advanced Features
+
+### Hybrid Retrieval
+Combine vector similarity search with keyword filtering:
+```
+You: department=Engineering Show all projects
+```
+
+### Hierarchical Summarization
+Automatically handles large context windows by:
+1. Retrieving relevant chunks
+2. Summarizing in batches if needed
+3. Maintaining entity relationships in summaries
+
 ## Data Processing
 
 The system processes JSON files with:
@@ -86,6 +101,7 @@ The system uses PostgreSQL with the following tables:
 - `json_chunks`: Stores document chunks and their embeddings
 - `file_metadata`: Tracks processed files and their hashes
 - `schema_evolution`: Monitors JSON schema changes over time
+- `chunk_keys_index`: Indexes key-value pairs for hybrid retrieval
 
 ## Features in Detail
 
@@ -106,6 +122,18 @@ The system uses PostgreSQL with the following tables:
 - Entity relationship preservation
 - Hierarchical path tracking
 - Smart boundary detection
+
+### Hybrid Search
+- Vector similarity search
+- Keyword-based filtering
+- Combined ranking system
+- Path-aware querying
+
+### Hierarchical Summarization
+- Multi-level summarization
+- Context preservation in summaries
+- Entity relationship maintenance
+- Automatic chunk management
 
 ## License
 
