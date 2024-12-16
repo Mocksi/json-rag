@@ -121,15 +121,6 @@ The system generates the following document types:
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
-## Documentation
-
-For full documentation, visit our [Documentation Site](https://docs.example.com).
-
-## Support
-
-* [GitHub Issues](https://github.com/username/json-rag-integration/issues)
-* [Documentation](https://docs.example.com)
-* [Discord Community](https://discord.gg/example)
 
 ## Roadmap
 
