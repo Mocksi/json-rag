@@ -1,21 +1,23 @@
 # JSON RAG Integration
 
-A tool for efficiently loading and integrating nested JSON data structures into RAG (Retrieval-Augmented Generation) systems.
+A tool for efficiently loading and integrating nested JSON data structures into RAG (Retrieval-Augmented Generation) systems, with enhanced entity tracking and context preservation.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python Versions](https://img.shields.io/badge/python-3.9-blue)](https://www.python.org/downloads/)
 
 ## Overview
 
-This project provides utilities for processing hierarchical JSON data and preparing it for use in RAG applications. It handles nested JSON structures while preserving relationships between different data levels, making it ideal for complex organizational data.
+This project provides utilities for processing hierarchical JSON data and preparing it for use in RAG applications. It features advanced entity tracking, relationship mapping, and context preservation, making it ideal for complex organizational data structures.
 
 ## Features
 
-* Flattens nested JSON structures while maintaining referential integrity
-* Preserves metadata and tracks schema evolution
-* Supports recursive traversal of deeply nested objects
-* Handles arrays and nested object arrays
-* Maintains parent-child relationships in the processed output
+* Advanced entity tracking and relationship mapping
+* Hierarchical context preservation in chunks
+* Path-aware chunking strategy
+* Intelligent entity relationship detection
+* Schema evolution tracking
+* Secure API key management
+* PostgreSQL vector storage
 
 ## Installation
 
@@ -50,26 +52,31 @@ python rag_app.py --new
 
 Type `:quit` to exit the chat.
 
-## Data Structure
-The system processes JSON files from the `data/json_docs/` directory. Example structure:
+## Data Processing
 
+The system processes JSON files with:
+* Entity detection and relationship mapping
+* Context-aware chunking
+* Path preservation
+* Hierarchical relationship tracking
+
+Example of processed structure:
 ```json
 {
-  "metadata": {
-    "version": "1.2",
-    "source": "internal"
-  },
-  "offices": [
-    {
-      "city": "Chicago",
-      "employees": [
-        {
-          "name": "Alice",
-          "role": "Manager"
+  "organization": {
+    "name": "Acme Corp",
+    "projects": [
+      {
+        "name": "Project Alpha",
+        "team": {
+          "lead": {
+            "name": "Alice Smith",
+            "role": "Project Manager"
+          }
         }
-      ]
-    }
-  ]
+      }
+    ]
+  }
 }
 ```
 
@@ -79,6 +86,26 @@ The system uses PostgreSQL with the following tables:
 - `json_chunks`: Stores document chunks and their embeddings
 - `file_metadata`: Tracks processed files and their hashes
 - `schema_evolution`: Monitors JSON schema changes over time
+
+## Features in Detail
+
+### Entity Tracking
+- Identifies and tracks named entities
+- Maps relationships between entities
+- Preserves hierarchical context
+- Tracks roles and associations
+
+### Context Preservation
+- Maintains path-based context
+- Preserves parent-child relationships
+- Tracks organizational hierarchy
+- Maintains reference integrity
+
+### Intelligent Chunking
+- Context-aware chunk creation
+- Entity relationship preservation
+- Hierarchical path tracking
+- Smart boundary detection
 
 ## License
 
