@@ -1,22 +1,150 @@
 {
   "metadata": {
-    "version": "1.2",
-    "source": "internal"
+    "version": "2.1",
+    "last_updated": "2024-03-15T14:22:33Z",
+    "config": {
+      "chunk_size": 1000,
+      "overlap": 200,
+      "embeddings": {
+        "model": "e5-large",
+        "normalize": true,
+        "params": {
+          "pooling": "mean",
+          "max_length": 512
+        }
+      }
+    }
   },
-  "offices": [
+  "organizations": [
     {
-      "city": "Chicago",
-      "employees": [
+      "id": "org_123",
+      "name": "TechCorp Global",
+      "divisions": [
         {
-          "name": "Alice",
-          "role": "Manager",
-          "details": {
-            "years_at_company": 5,
-            "projects": [
-              {"name": "ProjectX", "status": "ongoing"},
-              {"name": "ProjectY", "status": "completed"}
-            ]
-          }
+          "name": "R&D",
+          "locations": [
+            {
+              "city": "Boston",
+              "type": "headquarters",
+              "departments": [
+                {
+                  "name": "AI Research",
+                  "teams": [
+                    {
+                      "name": "NLP",
+                      "projects": [
+                        {
+                          "id": "nlp_001",
+                          "title": "Multilingual Translation",
+                          "status": "active",
+                          "members": [
+                            {
+                              "id": "emp_789",
+                              "name": "Dr. Sarah Chen",
+                              "role": "Lead Researcher",
+                              "publications": [
+                                {
+                                  "title": "Novel Approaches to Cross-lingual Transfer",
+                                  "year": 2023,
+                                  "citations": 45,
+                                  "keywords": ["NLP", "machine translation", "transformers"]
+                                }
+                              ],
+                              "skills": ["PyTorch", "Transformers", "CUDA"],
+                              "certifications": [
+                                {
+                                  "name": "GPU Computing",
+                                  "issuer": "NVIDIA",
+                                  "valid_until": "2025-12-31"
+                                }
+                              ]
+                            }
+                          ],
+                          "milestones": [
+                            {
+                              "phase": "research",
+                              "deadline": "2024-06-30",
+                              "deliverables": [
+                                {
+                                  "name": "Architecture Proposal",
+                                  "status": "completed",
+                                  "reviews": [
+                                    {
+                                      "reviewer": "Technical Committee",
+                                      "date": "2024-02-15",
+                                      "comments": [
+                                        {
+                                          "section": "Methodology",
+                                          "feedback": "Innovative approach to attention mechanisms",
+                                          "priority": "high"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ],
+                      "resources": {
+                        "compute": {
+                          "gpu_clusters": [
+                            {
+                              "name": "cluster_a",
+                              "specs": {
+                                "gpu_type": "A100",
+                                "node_count": 8,
+                                "memory_per_node": "80GB"
+                              },
+                              "usage": [
+                                {
+                                  "project_id": "nlp_001",
+                                  "allocation": "40%",
+                                  "schedule": {
+                                    "start": "2024-01-01",
+                                    "end": "2024-12-31",
+                                    "priority": 1
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "partnerships": [
+        {
+          "partner": "University of Technology",
+          "type": "research",
+          "projects": [
+            {
+              "name": "Joint ML Research",
+              "budget": 1500000,
+              "participants": {
+                "university": ["Dr. James Wilson", "Dr. Emily Rodriguez"],
+                "company": ["Dr. Sarah Chen"],
+                "students": [
+                  {
+                    "name": "Alex Kim",
+                    "degree": "PhD",
+                    "thesis": {
+                      "topic": "Efficient Training of Large Language Models",
+                      "advisors": ["Dr. Wilson", "Dr. Chen"],
+                      "expected_completion": "2025"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
         }
       ]
     }

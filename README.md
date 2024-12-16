@@ -3,7 +3,7 @@
 A tool for efficiently loading and integrating nested JSON data structures into RAG (Retrieval-Augmented Generation) systems.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Python Versions](https://img.shields.io/badge/python-3.7%20%7C%203.8%20%7C%203.9%20%7C%203.10-blue)](https://www.python.org/downloads/)
+[![Python Versions](https://img.shields.io/badge/python-3.9-blue)](https://www.python.org/downloads/)
 
 ## Overview
 
@@ -12,34 +12,46 @@ This project provides utilities for processing hierarchical JSON data and prepar
 ## Features
 
 * Flattens nested JSON structures while maintaining referential integrity
-* Preserves metadata at each level of the hierarchy
+* Preserves metadata and tracks schema evolution
 * Supports recursive traversal of deeply nested objects
 * Handles arrays and nested object arrays
 * Maintains parent-child relationships in the processed output
 
 ## Installation
 
+1. Clone the repository
+2. Create a virtual environment:
 ```bash
-pip install json-rag-integration
+python -m venv rag_env
+source rag_env/bin/activate  # On Windows: rag_env\Scripts\activate
 ```
 
-## Quick Start
-
-```python
-from json_rag import JSONProcessor
-
-# Load your JSON data
-processor = JSONProcessor('data.json')
-
-# Process and prepare for RAG
-processed_data = processor.prepare_for_rag()
-
-# Use with your favorite RAG system
-documents = processed_data.to_documents()
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
 ```
 
-## Sample Data Structure
-The system is designed to handle complex nested JSON structures:
+4. Set up environment variables in `.env`:
+```
+OPENAI_API_KEY=your-key-here
+```
+
+## Usage
+
+Start the interactive chat:
+```bash
+python rag_app.py
+```
+
+Reset database and start fresh:
+```bash
+python rag_app.py --new
+```
+
+Type `:quit` to exit the chat.
+
+## Data Structure
+The system processes JSON files from the `data/json_docs/` directory. Example structure:
 
 ```json
 {
@@ -53,14 +65,7 @@ The system is designed to handle complex nested JSON structures:
       "employees": [
         {
           "name": "Alice",
-          "role": "Manager",
-          "details": {
-            "years_at_company": 5,
-            "projects": [
-              {"name": "ProjectX", "status": "ongoing"},
-              {"name": "ProjectY", "status": "completed"}
-            ]
-          }
+          "role": "Manager"
         }
       ]
     }
@@ -68,54 +73,12 @@ The system is designed to handle complex nested JSON structures:
 }
 ```
 
-## Key Components
-### JSONProcessor
-The main class that handles JSON processing and preparation for RAG systems.
+## Database Schema
 
-```python
-# Initialize with custom configuration
-config = {
-    "flatten_arrays": True,
-    "preserve_paths": True,
-    "include_metadata": True
-}
-processor = JSONProcessor('data.json', config=config)
-```
-
-### Document Generation
-
-The system generates the following document types:
-
-* Root level metadata document
-* Office level documents with location context
-* Employee documents with hierarchical relationships
-* Project documents linked to employees
-
-## Best Practices
-
-1. **Path Preservation**
-  * Keep track of JSON paths for better context retrieval
-  * Use consistent path formatting
-
-2. **Metadata Handling**
-  * Include relevant metadata in each generated document
-  * Maintain versioning information
-
-3. **Relationship Mapping**
-  * Maintain explicit references between related documents
-  * Use consistent reference formatting
-
-4. **Array Processing**
-  * Configure array handling based on your use case
-  * Consider pagination for large arrays
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+The system uses PostgreSQL with the following tables:
+- `json_chunks`: Stores document chunks and their embeddings
+- `file_metadata`: Tracks processed files and their hashes
+- `schema_evolution`: Monitors JSON schema changes over time
 
 ## License
 
