@@ -37,6 +37,15 @@ MAX_CHUNKS = 4
 # Utility Functions
 # =========================
 def compute_file_hash(filepath):
+    """
+    Compute SHA-256 hash of a file.
+    
+    Args:
+        filepath (str): Path to the file to hash
+        
+    Returns:
+        str: Hexadecimal representation of the file's SHA-256 hash
+    """
     hasher = hashlib.sha256()
     with open(filepath, 'rb') as f:
         buf = f.read()
@@ -44,15 +53,39 @@ def compute_file_hash(filepath):
     return hasher.hexdigest()
 
 def get_json_files():
+    """
+    Get list of JSON files from the configured data directory.
+    
+    Returns:
+        list: List of paths to JSON files in the data directory
+    """
     return glob.glob(os.path.join(DATA_DIR, "*.json"))
 
 def get_file_info(conn):
+    """
+    Retrieve metadata about previously processed files from database.
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Returns:
+        dict: Mapping of filenames to tuples of (hash, last_modified_time)
+    """
     cur = conn.cursor()
     cur.execute("SELECT filename, file_hash, last_modified FROM file_metadata;")
     rows = cur.fetchall()
     return {r[0]: (r[1], r[2]) for r in rows}
 
 def upsert_file_metadata(conn, filename, file_hash, mod_time):
+    """
+    Update or insert file metadata in the database.
+    
+    Args:
+        conn: PostgreSQL database connection
+        filename (str): Name of the file
+        file_hash (str): SHA-256 hash of the file
+        mod_time (datetime): Last modification time
+    """
     cur = conn.cursor()
     query = """
     INSERT INTO file_metadata (filename, file_hash, last_modified)
@@ -65,6 +98,15 @@ def upsert_file_metadata(conn, filename, file_hash, mod_time):
     conn.commit()
 
 def get_files_to_process(conn):
+    """
+    Identify files that need processing (new or modified).
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Returns:
+        list: Tuples of (filename, hash, modification_time) for files needing processing
+    """
     existing_info = get_file_info(conn)
     files = get_json_files()
     to_process = []
@@ -80,7 +122,18 @@ def get_files_to_process(conn):
     return to_process
 
 def create_enhanced_chunk(path, value, context=None, entities=None):
-    """Create an enhanced text chunk with path, type, value, and related context."""
+    """
+    Create an enhanced text chunk with path, type, value, and related context.
+    
+    Args:
+        path (str): JSON path to the current value
+        value: The value at the current path
+        context (dict, optional): Parent context information
+        entities (dict, optional): Known entities and their relationships
+        
+    Returns:
+        str: Formatted string containing the chunk with context
+    """
     val_type = type(value).__name__
     
     # Handle different value types appropriately
@@ -139,6 +192,19 @@ def create_enhanced_chunk(path, value, context=None, entities=None):
     return "\n".join(chunk_parts)
 
 def json_to_path_chunks(json_obj, current_path="$", entities=None, parent_context=None, path_contexts=None):
+    """
+    Convert JSON object to path-aware chunks with context preservation.
+    
+    Args:
+        json_obj: JSON object to process
+        current_path (str): Current path in JSON structure
+        entities (dict, optional): Known entities and relationships
+        parent_context (dict, optional): Context from parent nodes
+        path_contexts (dict, optional): Accumulated path contexts
+        
+    Returns:
+        list: List of text chunks with preserved context
+    """
     chunks = []
     if path_contexts is None:
         path_contexts = {}
@@ -190,7 +256,17 @@ def json_to_path_chunks(json_obj, current_path="$", entities=None, parent_contex
     return chunks
 
 def track_entity_relationships(json_obj, current_path="$", parent_context=None):
-    """Track relationships between entities with enhanced context"""
+    """
+    Track relationships between entities with enhanced context.
+    
+    Args:
+        json_obj: JSON object to analyze
+        current_path (str): Current path in JSON structure
+        parent_context (dict, optional): Context from parent nodes
+        
+    Returns:
+        list: List of relationship dictionaries
+    """
     relationships = []
     
     def process_node(node, path, context):
@@ -243,7 +319,16 @@ def track_entity_relationships(json_obj, current_path="$", parent_context=None):
     return relationships
 
 def extract_entities(json_obj, current_path="$"):
-    """Enhanced entity extraction with relationship tracking"""
+    """
+    Extract and track entities with their relationships and context.
+    
+    Args:
+        json_obj: JSON object to process
+        current_path (str): Current path in JSON structure
+        
+    Returns:
+        dict: Dictionary of entities with context and relationships
+    """
     entities = {}
     relationships = track_entity_relationships(json_obj, current_path)
     
@@ -262,6 +347,15 @@ def extract_entities(json_obj, current_path="$"):
     return entities
 
 def load_and_embed_new_data(conn):
+    """
+    Load new or modified files, process them, and store embeddings.
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Processes files, extracts entities, generates chunks, and stores embeddings.
+    Updates file metadata and schema evolution tracking.
+    """
     to_process = get_files_to_process(conn)
     if not to_process:
         print("No new or changed files to process.")
@@ -357,6 +451,17 @@ def load_and_embed_new_data(conn):
         upsert_file_metadata(conn, f, f_hash, f_mtime)
 
 def get_relevant_chunks(conn, query, top_k=5):
+    """
+    Retrieve most relevant chunks for a query using vector similarity.
+    
+    Args:
+        conn: PostgreSQL database connection
+        query (str): User's query
+        top_k (int): Number of chunks to retrieve
+        
+    Returns:
+        list: Most relevant text chunks for the query
+    """
     cur = conn.cursor()
     query_embedding = embedding_model.encode([query])[0]
     query_embedding_list = query_embedding.tolist()
@@ -375,6 +480,16 @@ def get_relevant_chunks(conn, query, top_k=5):
     return retrieved_texts
 
 def build_prompt(user_query, retrieved_chunks):
+    """
+    Build a prompt for the language model using retrieved context.
+    
+    Args:
+        user_query (str): User's question
+        retrieved_chunks (list): Relevant context chunks
+        
+    Returns:
+        str: Formatted prompt with context and query
+    """
     context_str = "\n\n".join(retrieved_chunks)
     prompt = f"""You are a helpful assistant. Use the provided context to answer the user's query.
 
@@ -394,6 +509,16 @@ Only use the provided context to answer."""
     return prompt
 
 def answer_query(conn, query):
+    """
+    Process a user query and generate an answer using RAG.
+    
+    Args:
+        conn: PostgreSQL database connection
+        query (str): User's question
+        
+    Returns:
+        str: Generated answer based on retrieved context
+    """
     retrieved_chunks = get_relevant_chunks(conn, query)
     if len(retrieved_chunks) > MAX_CHUNKS:
         retrieved_chunks = retrieved_chunks[:MAX_CHUNKS]
@@ -413,6 +538,14 @@ def answer_query(conn, query):
     return completion.choices[0].message.content.strip()
 
 def chat_loop(conn):
+    """
+    Run interactive chat loop for user queries.
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Handles user input/output and query processing until exit.
+    """
     print("Enter your queries below. Type ':quit' to exit.")
     while True:
         user_input = input("You: ")
@@ -429,6 +562,14 @@ def chat_loop(conn):
             print("Error processing query:", str(e))
 
 def reset_database(conn):
+    """
+    Reset the database by truncating all tables.
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Requires user confirmation before proceeding.
+    """
     print("Warning: This will delete all stored embeddings and metadata.")
     confirmation = input("Are you sure you want to reset the database? (yes/no): ")
     if confirmation.lower() != 'yes':
@@ -447,6 +588,12 @@ def reset_database(conn):
     print("Database reset complete.")
 
 def main():
+    """
+    Main entry point for the application.
+    
+    Handles command line arguments, database connection,
+    and orchestrates the overall application flow.
+    """
     conn = psycopg2.connect(POSTGRES_CONN_STR)
     try:
         # Initial load/embedding

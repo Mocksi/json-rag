@@ -1,152 +1,130 @@
 {
-  "metadata": {
-    "version": "2.1",
-    "last_updated": "2024-03-15T14:22:33Z",
-    "config": {
-      "chunk_size": 1000,
-      "overlap": 200,
-      "embeddings": {
-        "model": "e5-large",
-        "normalize": true,
-        "params": {
-          "pooling": "mean",
-          "max_length": 512
-        }
-      }
-    }
+  "catalog_metadata": {
+    "last_updated": "2024-03-15T08:00:00Z",
+    "version": "4.2.1",
+    "pricing_rules_version": "2.1"
   },
-  "organizations": [
+  "categories": [
     {
-      "id": "org_123",
-      "name": "TechCorp Global",
-      "divisions": [
+      "id": "electronics",
+      "name": "Electronics",
+      "products": [
         {
-          "name": "R&D",
-          "locations": [
+          "sku": "PHONE-PRO-12",
+          "name": "SmartPhone Pro 12",
+          "base_price": 999.99,
+          "variations": [
             {
-              "city": "Boston",
-              "type": "headquarters",
-              "departments": [
-                {
-                  "name": "AI Research",
-                  "teams": [
-                    {
-                      "name": "NLP",
-                      "projects": [
-                        {
-                          "id": "nlp_001",
-                          "title": "Multilingual Translation",
-                          "status": "active",
-                          "members": [
-                            {
-                              "id": "emp_789",
-                              "name": "Dr. Sarah Chen",
-                              "role": "Lead Researcher",
-                              "publications": [
-                                {
-                                  "title": "Novel Approaches to Cross-lingual Transfer",
-                                  "year": 2023,
-                                  "citations": 45,
-                                  "keywords": ["NLP", "machine translation", "transformers"]
-                                }
-                              ],
-                              "skills": ["PyTorch", "Transformers", "CUDA"],
-                              "certifications": [
-                                {
-                                  "name": "GPU Computing",
-                                  "issuer": "NVIDIA",
-                                  "valid_until": "2025-12-31"
-                                }
-                              ]
-                            }
-                          ],
-                          "milestones": [
-                            {
-                              "phase": "research",
-                              "deadline": "2024-06-30",
-                              "deliverables": [
-                                {
-                                  "name": "Architecture Proposal",
-                                  "status": "completed",
-                                  "reviews": [
-                                    {
-                                      "reviewer": "Technical Committee",
-                                      "date": "2024-02-15",
-                                      "comments": [
-                                        {
-                                          "section": "Methodology",
-                                          "feedback": "Innovative approach to attention mechanisms",
-                                          "priority": "high"
-                                        }
-                                      ]
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        }
-                      ],
-                      "resources": {
-                        "compute": {
-                          "gpu_clusters": [
-                            {
-                              "name": "cluster_a",
-                              "specs": {
-                                "gpu_type": "A100",
-                                "node_count": 8,
-                                "memory_per_node": "80GB"
-                              },
-                              "usage": [
-                                {
-                                  "project_id": "nlp_001",
-                                  "allocation": "40%",
-                                  "schedule": {
-                                    "start": "2024-01-01",
-                                    "end": "2024-12-31",
-                                    "priority": 1
-                                  }
-                                }
-                              ]
-                            }
-                          ]
-                        }
+              "sku": "PHONE-PRO-12-128-BLACK",
+              "attributes": {
+                "storage": "128GB",
+                "color": "Black",
+                "condition": "new"
+              },
+              "inventory": {
+                "warehouses": [
+                  {
+                    "id": "WH-EAST",
+                    "location": "New Jersey",
+                    "stock": 125,
+                    "reserved": 30,
+                    "incoming_shipments": [
+                      {
+                        "tracking_id": "SHIP-123",
+                        "eta": "2024-03-20",
+                        "quantity": 50
                       }
-                    }
-                  ]
+                    ]
+                  }
+                ],
+                "threshold_alerts": {
+                  "low_stock": 20,
+                  "reorder_point": 50
+                }
+              },
+              "pricing_rules": [
+                {
+                  "id": "SPRING-SALE",
+                  "type": "time_based_discount",
+                  "conditions": {
+                    "start_date": "2024-03-21",
+                    "end_date": "2024-03-28",
+                    "discount_percentage": 15,
+                    "stackable": false
+                  }
+                },
+                {
+                  "id": "BULK-DISC",
+                  "type": "volume_discount",
+                  "conditions": {
+                    "min_quantity": 5,
+                    "discount_percentage": 10,
+                    "stackable": true
+                  }
                 }
               ]
             }
-          ]
-        }
-      ],
-      "partnerships": [
-        {
-          "partner": "University of Technology",
-          "type": "research",
-          "projects": [
+          ],
+          "reviews": [
             {
-              "name": "Joint ML Research",
-              "budget": 1500000,
-              "participants": {
-                "university": ["Dr. James Wilson", "Dr. Emily Rodriguez"],
-                "company": ["Dr. Sarah Chen"],
-                "students": [
-                  {
-                    "name": "Alex Kim",
-                    "degree": "PhD",
-                    "thesis": {
-                      "topic": "Efficient Training of Large Language Models",
-                      "advisors": ["Dr. Wilson", "Dr. Chen"],
-                      "expected_completion": "2025"
-                    }
-                  }
-                ]
+              "id": "REV-789",
+              "customer": {
+                "id": "CUST-456",
+                "name": "Jane Smith",
+                "verified_purchase": true,
+                "purchase_date": "2024-02-15"
+              },
+              "rating": 4,
+              "content": "Great phone but battery life could be better",
+              "helpful_votes": 23,
+              "responses": [
+                {
+                  "from": "support_team",
+                  "content": "Thank you for your feedback about the battery life",
+                  "timestamp": "2024-02-16T14:30:00Z"
+                }
+              ],
+              "usage_metrics": {
+                "days_used": 30,
+                "features_used": ["camera", "5G", "wireless_charging"]
               }
             }
-          ]
+          ],
+          "specifications": {
+            "dimensions": {
+              "height": 146.7,
+              "width": 71.5,
+              "depth": 7.4,
+              "unit": "mm"
+            },
+            "battery": {
+              "capacity": 4000,
+              "unit": "mAh",
+              "fast_charging": true,
+              "wireless_charging": true
+            },
+            "certifications": [
+              {
+                "name": "IP68",
+                "description": "Water and dust resistant",
+                "testing_agency": "IEC",
+                "valid_until": "2026-12-31"
+              }
+            ]
+          }
         }
       ]
     }
-  ]
+  ],
+  "pricing_policies": {
+    "global_rules": {
+      "max_discount_percentage": 40,
+      "minimum_margin": 10,
+      "currency": "USD",
+      "tax_rates": {
+        "standard": 8.5,
+        "reduced": 5.0
+      }
+    }
+  }
 }
