@@ -105,14 +105,14 @@ def load_and_embed_new_data(conn):
         embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
         chunk_id = f"{f}:{i}"
         
-        # Serialize chunk to JSON string for storage
+        # Serialize chunk to both text and JSON
         chunk_text = json.dumps(chunk)
         
         cur.execute("""
-            INSERT INTO json_chunks (id, chunk_text, embedding)
-            VALUES (%s, %s, %s)
+            INSERT INTO json_chunks (id, chunk_text, chunk_json, embedding, metadata)
+            VALUES (%s, %s, %s::jsonb, %s, '{}'::jsonb)
             ON CONFLICT (id) DO NOTHING;
-        """, (chunk_id, chunk_text, embedding_str))
+        """, (chunk_id, chunk_text, chunk_text, embedding_str))
         
         try:
             # Extract key-value pairs from the chunk dictionary directly

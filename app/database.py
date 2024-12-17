@@ -131,7 +131,9 @@ def init_db(conn):
         CREATE TABLE IF NOT EXISTS json_chunks (
             id TEXT PRIMARY KEY,
             chunk_text TEXT NOT NULL,
-            embedding vector(1536)
+            chunk_json JSONB NOT NULL,
+            embedding vector(384),
+            metadata JSONB DEFAULT '{}'::jsonb
         )
     """)
     cur.execute("""

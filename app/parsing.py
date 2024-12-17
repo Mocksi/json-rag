@@ -183,15 +183,19 @@ def create_enhanced_chunk(path, value, context=None, entities=None):
         }
     }
     enrich_chunk_metadata(chunk_data, value)
+    
+    # Create both text and JSON versions
+    chunk_text = json.dumps(chunk_data, default=str)
     try:
-        return json.dumps(chunk_data, default=str)
+        return chunk_text, chunk_data
     except TypeError as e:
         print(f"Error serializing chunk data: {e}")
-        return json.dumps({
+        error_data = {
             'path': path,
             'error': 'Serialization failed',
             'metadata': chunk_data['metadata']
-        })
+        }
+        return json.dumps(error_data), error_data
 
 def track_entity_relationships(json_obj, current_path="$", parent_context=None):
     """

@@ -9,7 +9,7 @@ from app.utils import parse_timestamp
 from app.embedding import vector_search_with_filter
 from app.parsing import json_to_path_chunks, extract_entities
 from app.intent import analyze_query_intent, extract_filters_from_query, get_system_prompt
-from app.database import get_files_to_process, upsert_file_metadata
+from app.database import get_files_to_process, upsert_file_metadata, init_db
 from app.config import embedding_model
 from app.utils import get_json_files
 
@@ -222,13 +222,13 @@ def temporal_retrieval(conn, query, top_k=20):
         SELECT DISTINCT 
             c.chunk_text,
             COALESCE(
-                (c.chunk_text -> 'temporal_metadata' ->> 'timestamp')::timestamp,
-                (c.chunk_text -> 'value' ->> 'value')::timestamp
+                (c.chunk_json -> 'temporal_metadata' ->> 'timestamp')::timestamp,
+                (c.chunk_json -> 'value' ->> 'value')::timestamp
             ) as event_time
         FROM json_chunks c
         WHERE (
-            c.chunk_text -> 'value' ->> 'value' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}' 
-            OR c.chunk_text -> 'temporal_metadata' ->> 'timestamp' IS NOT NULL
+            c.chunk_json -> 'value' ->> 'value' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}' 
+            OR c.chunk_json -> 'temporal_metadata' ->> 'timestamp' IS NOT NULL
         )
     )
     SELECT chunk_text::text
