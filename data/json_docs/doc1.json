@@ -1,130 +1,57 @@
 {
-  "catalog_metadata": {
-    "last_updated": "2024-03-15T08:00:00Z",
-    "version": "4.2.1",
-    "pricing_rules_version": "2.1"
-  },
-  "categories": [
-    {
-      "id": "electronics",
-      "name": "Electronics",
-      "products": [
-        {
-          "sku": "PHONE-PRO-12",
-          "name": "SmartPhone Pro 12",
-          "base_price": 999.99,
-          "variations": [
-            {
-              "sku": "PHONE-PRO-12-128-BLACK",
-              "attributes": {
-                "storage": "128GB",
-                "color": "Black",
-                "condition": "new"
-              },
-              "inventory": {
-                "warehouses": [
-                  {
-                    "id": "WH-EAST",
-                    "location": "New Jersey",
-                    "stock": 125,
-                    "reserved": 30,
-                    "incoming_shipments": [
-                      {
-                        "tracking_id": "SHIP-123",
-                        "eta": "2024-03-20",
-                        "quantity": 50
-                      }
-                    ]
-                  }
-                ],
-                "threshold_alerts": {
-                  "low_stock": 20,
-                  "reorder_point": 50
-                }
-              },
-              "pricing_rules": [
-                {
-                  "id": "SPRING-SALE",
-                  "type": "time_based_discount",
-                  "conditions": {
-                    "start_date": "2024-03-21",
-                    "end_date": "2024-03-28",
-                    "discount_percentage": 15,
-                    "stackable": false
-                  }
-                },
-                {
-                  "id": "BULK-DISC",
-                  "type": "volume_discount",
-                  "conditions": {
-                    "min_quantity": 5,
-                    "discount_percentage": 10,
-                    "stackable": true
-                  }
-                }
-              ]
-            }
-          ],
-          "reviews": [
-            {
-              "id": "REV-789",
-              "customer": {
-                "id": "CUST-456",
-                "name": "Jane Smith",
-                "verified_purchase": true,
-                "purchase_date": "2024-02-15"
-              },
-              "rating": 4,
-              "content": "Great phone but battery life could be better",
-              "helpful_votes": 23,
-              "responses": [
-                {
-                  "from": "support_team",
-                  "content": "Thank you for your feedback about the battery life",
-                  "timestamp": "2024-02-16T14:30:00Z"
-                }
-              ],
-              "usage_metrics": {
-                "days_used": 30,
-                "features_used": ["camera", "5G", "wireless_charging"]
-              }
-            }
-          ],
-          "specifications": {
-            "dimensions": {
-              "height": 146.7,
-              "width": 71.5,
-              "depth": 7.4,
-              "unit": "mm"
-            },
-            "battery": {
-              "capacity": 4000,
-              "unit": "mAh",
-              "fast_charging": true,
-              "wireless_charging": true
-            },
-            "certifications": [
+  "cluster_metrics": {
+    "cluster_id": "PROD-US-EAST",
+    "time_window": {
+      "start": "2024-03-16T09:00:00Z",
+      "end": "2024-03-16T10:00:00Z",
+      "interval": "5m"
+    },
+    "nodes": [
+      {
+        "node_id": "node-1",
+        "metrics": [
+          {
+            "timestamp": "2024-03-16T09:00:00Z",
+            "cpu_util": 45.5,
+            "memory_util": 60.2,
+            "network_in_mbps": 150.0,
+            "network_out_mbps": 89.3
+          },
+          {
+            "timestamp": "2024-03-16T09:05:00Z",
+            "cpu_util": 82.3,
+            "memory_util": 65.5,
+            "network_in_mbps": 250.0,
+            "network_out_mbps": 180.2,
+            "alerts": [
               {
-                "name": "IP68",
-                "description": "Water and dust resistant",
-                "testing_agency": "IEC",
-                "valid_until": "2026-12-31"
+                "type": "threshold_exceeded",
+                "metric": "cpu_util",
+                "threshold": 80.0
+              }
+            ]
+          },
+          {
+            "timestamp": "2024-03-16T09:10:00Z",
+            "cpu_util": 95.0,
+            "memory_util": 72.3,
+            "network_in_mbps": 350.0,
+            "network_out_mbps": 220.5,
+            "alerts": [
+              {
+                "type": "threshold_exceeded",
+                "metric": "cpu_util",
+                "threshold": 80.0
+              },
+              {
+                "type": "threshold_exceeded",
+                "metric": "network_in_mbps",
+                "threshold": 300.0
               }
             ]
           }
-        }
-      ]
-    }
-  ],
-  "pricing_policies": {
-    "global_rules": {
-      "max_discount_percentage": 40,
-      "minimum_margin": 10,
-      "currency": "USD",
-      "tax_rates": {
-        "standard": 8.5,
-        "reduced": 5.0
+        ]
       }
-    }
+    ]
   }
 }
