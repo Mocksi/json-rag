@@ -2,142 +2,74 @@
 
 A tool for efficiently loading and integrating nested JSON data structures into RAG (Retrieval-Augmented Generation) systems, with enhanced entity tracking and context preservation.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Python Versions](https://img.shields.io/badge/python-3.9-blue)](https://www.python.org/downloads/)
+## Key Features
 
-## Overview
+* **Smart Archetype Detection**: Automatically identifies data patterns (event logs, API responses, metrics, etc.)
+* **Context-Aware Chunking**: Preserves relationships and structure based on data type
+* **Intelligent Summarization**: Generates summaries tailored to data patterns:
+  - Event sequences with causal chains
+  - API responses with resource relationships
+  - Metric series with trend analysis
 
-This project provides utilities for processing hierarchical JSON data and preparing it for use in RAG applications. It features advanced entity tracking, relationship mapping, hybrid retrieval, and hierarchical summarization.
+## Quick Start
 
-## Features
-
-* Advanced entity tracking and relationship mapping
-* Hierarchical context preservation in chunks
-* Path-aware chunking strategy
-* Hybrid retrieval (vector + keyword filtering)
-* Hierarchical summarization for large contexts
-* Schema evolution tracking
-* Secure API key management
-* PostgreSQL vector storage
-
-## Installation
-
-1. Clone the repository
-2. Create a virtual environment:
+1. Clone and install:
 ```bash
+git clone https://github.com/yourusername/json_rag.git
+cd json_rag
 python -m venv rag_env
-source rag_env/bin/activate  # On Windows: rag_env\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+source rag_env/bin/activate  # Windows: rag_env\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables in `.env`:
-```
+2. Set up environment:
+```bash
+# Create .env file with:
 OPENAI_API_KEY=your-key-here
 ```
 
-## Usage
-
-Start the interactive chat:
-```bash
-python rag_app.py
-```
-
-Reset database and start fresh:
+3. Initialize system:
 ```bash
 python rag_app.py --new
 ```
 
-Type `:quit` to exit the chat.
-
-## Advanced Features
-
-### Hybrid Retrieval
-Combine vector similarity search with keyword filtering:
-```
-You: department=Engineering Show all projects
+4. Start interactive chat:
+```bash
+python rag_app.py
 ```
 
-### Hierarchical Summarization
-Automatically handles large context windows by:
-1. Retrieving relevant chunks
-2. Summarizing in batches if needed
-3. Maintaining entity relationships in summaries
+## Usage Examples
 
-## Data Processing
-
-The system processes JSON files with:
-* Entity detection and relationship mapping
-* Context-aware chunking
-* Path preservation
-* Hierarchical relationship tracking
-
-Example of processed structure:
-```json
-{
-  "organization": {
-    "name": "Acme Corp",
-    "projects": [
-      {
-        "name": "Project Alpha",
-        "team": {
-          "lead": {
-            "name": "Alice Smith",
-            "role": "Project Manager"
-          }
-        }
-      }
-    ]
-  }
-}
+Query event sequences:
+```
+> Show me all events from the authentication service
+> What happened after the system alert at 2:00 PM?
 ```
 
-## Database Schema
+Query API data:
+```
+> List all resources with high usage metrics
+> Show relationships between users and projects
+```
 
-The system uses PostgreSQL with the following tables:
-- `json_chunks`: Stores document chunks and their embeddings
-- `file_metadata`: Tracks processed files and their hashes
-- `schema_evolution`: Monitors JSON schema changes over time
-- `chunk_keys_index`: Indexes key-value pairs for hybrid retrieval
+Query metrics:
+```
+> Show metrics with strong correlations
+> What metrics exceeded thresholds today?
+```
 
-## Features in Detail
+## Data Structure Support
 
-### Entity Tracking
-- Identifies and tracks named entities
-- Maps relationships between entities
-- Preserves hierarchical context
-- Tracks roles and associations
-
-### Context Preservation
-- Maintains path-based context
-- Preserves parent-child relationships
-- Tracks organizational hierarchy
-- Maintains reference integrity
-
-### Intelligent Chunking
-- Context-aware chunk creation
-- Entity relationship preservation
-- Hierarchical path tracking
-- Smart boundary detection
-
-### Hybrid Search
-- Vector similarity search
-- Keyword-based filtering
-- Combined ranking system
-- Path-aware querying
-
-### Hierarchical Summarization
-- Multi-level summarization
-- Context preservation in summaries
-- Entity relationship maintenance
-- Automatic chunk management
+- Event Logs
+- API Responses
+- Time Series Data
+- Entity Relationships
+- State Machines
+- Configuration Data
 
 ## License
 
-Distributed under the MIT License. See `LICENSE` for more information.
+MIT License - see LICENSE file for details.
 
 
 ## Roadmap
