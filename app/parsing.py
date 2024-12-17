@@ -7,7 +7,18 @@ from app.utils import parse_timestamp, classify_path
 from app.models import FlexibleModel
 
 def serialize_value(value):
-    # (Same code as before for serialize_value)
+    """
+    Serializes a Python value into a structured dictionary with type information.
+    
+    Args:
+        value: Any Python value (None, primitive, dict, list, or other)
+        
+    Returns:
+        dict: Structured representation containing:
+            - type: 'null', 'primitive', 'complex', or 'other'
+            - value: The actual value or sample for complex types
+            - additional metadata based on type
+    """
     if value is None:
         return {'type': 'null', 'value': None}
     if isinstance(value, (str, int, float, bool)):
@@ -46,6 +57,20 @@ def serialize_value(value):
     }
 
 def serialize_context(context):
+    """
+    Serializes a context dictionary into a format suitable for storage.
+    
+    Args:
+        context (dict): Context dictionary to serialize
+        
+    Returns:
+        dict: Serialized context with primitive values preserved and
+             complex values converted to strings
+        
+    Note:
+        Handles serialization errors by converting problematic values
+        to error messages.
+    """
     if not isinstance(context, dict):
         return {'error': 'Invalid context type'}
     serialized = {}
@@ -60,6 +85,18 @@ def serialize_context(context):
     return serialized
 
 def serialize_entities(entities):
+    """
+    Serializes entity information into a structured format.
+    
+    Args:
+        entities (dict): Dictionary of entity information
+        
+    Returns:
+        dict: Serialized entities with:
+            - type: Entity type
+            - attributes: Serialized context
+            - relationships: Serialized relationships
+    """
     if not isinstance(entities, dict):
         return {'error': 'Invalid entities type'}
     serialized = {}
@@ -75,6 +112,18 @@ def serialize_entities(entities):
     return serialized
 
 def enrich_chunk_metadata(chunk_data, value):
+    """
+    Enriches chunk data with additional metadata based on value type.
+    
+    Args:
+        chunk_data (dict): Chunk dictionary to enrich
+        value: Value to analyze for metadata
+        
+    Adds:
+        - numeric_metadata for numbers
+        - temporal_metadata for timestamps
+        - string_metadata for text
+    """
     if isinstance(value, (int, float)):
         val = value
         chunk_data['numeric_metadata'] = {
@@ -105,6 +154,21 @@ def enrich_chunk_metadata(chunk_data, value):
         }
 
 def create_enhanced_chunk(path, value, context=None, entities=None):
+    """
+    Creates an enhanced chunk with metadata, context, and entity information.
+    
+    Args:
+        path (str): JSONPath to the value
+        value: The value at the path
+        context (dict, optional): Additional context
+        entities (dict, optional): Related entity information
+        
+    Returns:
+        str: JSON string containing the enhanced chunk
+        
+    Note:
+        Handles serialization errors gracefully by returning error chunk.
+    """
     from app.config import MAX_CHUNKS
     chunk_data = {
         'path': path,
@@ -130,7 +194,21 @@ def create_enhanced_chunk(path, value, context=None, entities=None):
         })
 
 def track_entity_relationships(json_obj, current_path="$", parent_context=None):
-    # Move the track_entity_relationships code here from original
+    """
+    Tracks relationships between entities in a JSON object.
+    
+    Args:
+        json_obj: JSON object to analyze
+        current_path (str): Current path in the JSON (default: "$")
+        parent_context (dict, optional): Context from parent nodes
+        
+    Returns:
+        list: Found relationships with:
+            - entity information
+            - relationship type
+            - context
+            - path information
+    """
     relationships = []
     def process_node(node, path, context):
         if isinstance(node, dict):
@@ -186,6 +264,21 @@ def track_entity_relationships(json_obj, current_path="$", parent_context=None):
     return relationships
 
 def extract_entities(json_obj, current_path="$"):
+    """
+    Extracts entities and their relationships from a JSON object.
+    
+    Args:
+        json_obj: JSON object to analyze
+        current_path (str): Current path in the JSON (default: "$")
+        
+    Returns:
+        dict: Extracted entities with:
+            - path: Location in JSON
+            - type: Entity type
+            - context: Related context
+            - role: Entity role if applicable
+            - group information if applicable
+    """
     relationships = track_entity_relationships(json_obj, current_path)
     entities = {}
     for rel in relationships:
@@ -207,14 +300,18 @@ def extract_entities(json_obj, current_path="$"):
 
 def iterate_paths(json_obj, current_path="$"):
     """
-    Recursively iterate through JSON object and yield path-value pairs.
+    Recursively iterates through a JSON object yielding path-value pairs.
     
     Args:
-        json_obj: JSON object to iterate through
-        current_path (str): Current JSON path (default: "$")
+        json_obj: JSON object to iterate
+        current_path (str): Current path in the JSON (default: "$")
         
     Yields:
-        tuple: (path, value) pairs
+        tuple: (path, value) pairs using JSONPath notation
+        
+    Example paths:
+        - $.data.suppliers[0].name
+        - $.inventory_levels[1].quantity
     """
     if isinstance(json_obj, dict):
         for key, value in json_obj.items():
@@ -232,14 +329,19 @@ def iterate_paths(json_obj, current_path="$"):
 
 def json_to_path_chunks(json_obj, entities=None):
     """
-    Convert JSON object into chunks based on paths.
+    Converts a JSON object into a list of path-based chunks.
     
     Args:
-        json_obj: Parsed JSON object
-        entities (dict): Optional entity information
+        json_obj: JSON object to chunk
+        entities (dict, optional): Pre-extracted entity information
         
     Returns:
-        list: List of chunk dictionaries
+        list: Chunks with:
+            - path: JSONPath location
+            - value: Serialized value
+            - context: Hierarchical context
+            - display_names: Human-readable names
+            - entities: Related entity information
     """
     chunks = []
     for path, value in iterate_paths(json_obj):
@@ -377,15 +479,18 @@ def process_json_document(json_obj):
 
 def extract_context(json_obj, path, max_depth=3):
     """
-    Extract context information for a given path in JSON object.
+    Extracts hierarchical context for a path in a JSON object.
     
     Args:
         json_obj: JSON object to extract context from
-        path (str): Current JSON path
-        max_depth (int): Maximum depth of parent context to include
+        path (str): JSONPath to extract context for
+        max_depth (int): Maximum depth of parent context (default: 3)
         
     Returns:
-        dict: Context information
+        dict: Context information with parent paths as keys
+        
+    Note:
+        Truncates large values to prevent context bloat.
     """
     context = {}
     
@@ -435,14 +540,21 @@ def extract_context(json_obj, path, max_depth=3):
 
 def extract_display_names(json_obj, path):
     """
-    Extract human-readable names and labels from JSON object at given path.
+    Extracts human-readable names and labels from a JSON object.
     
     Args:
         json_obj: JSON object to extract names from
-        path (str): Current JSON path
+        path (str): JSONPath to the current location
         
     Returns:
-        dict: Display names and labels
+        dict: Display names and labels found in the object
+        
+    Looks for:
+        - name fields
+        - titles
+        - labels
+        - display names
+        - ID-name pairs
     """
     names = {}
     
@@ -477,14 +589,18 @@ def extract_display_names(json_obj, path):
 
 def extract_entities_with_names(entities, path):
     """
-    Extract entity information with display names for a given path.
+    Extracts entity information with display names for a path.
     
     Args:
         entities (dict): Entity registry
-        path (str): Current JSON path
+        path (str): JSONPath to match against
         
     Returns:
-        dict: Entity information with display names
+        dict: Entity information including:
+            - type: Entity type
+            - name: Display name
+            - attributes: Entity attributes
+            - relationships: Related entities
     """
     if not entities:
         return {}

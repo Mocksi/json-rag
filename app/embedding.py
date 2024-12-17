@@ -7,12 +7,22 @@ def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
     
     Args:
         conn: PostgreSQL database connection
-        query (str): Query string
-        allowed_chunk_ids (list): List of allowed chunk IDs
-        top_k (int): Number of results to return
+        query (str): Query string to embed and search
+        allowed_chunk_ids (list): List of chunk IDs to filter results
+        top_k (int): Maximum number of results to return
         
     Returns:
-        list: Retrieved chunks ordered by relevance
+        list: Retrieved chunks ordered by relevance score
+        
+    Process:
+        1. Generates embedding for query text
+        2. Performs cosine similarity search in database
+        3. Optionally filters by allowed chunk IDs
+        4. Returns top_k most similar chunks
+        
+    Note:
+        Uses PGVector for efficient similarity search
+        Includes debug output for query processing
     """
     print(f"\nDEBUG: Filtered search for query: '{query}'")
     print(f"DEBUG: Filtering on {len(allowed_chunk_ids) if allowed_chunk_ids else 0} chunk IDs")
@@ -61,7 +71,17 @@ def get_embedding(text):
         text (str): Text to embed
         
     Returns:
-        list: Embedding vector
+        list: Embedding vector of fixed dimension
+        
+    Note:
+        Handles invalid input by returning zero vector
+        Includes debug output for embedding generation
+        Uses sentence-transformers model from config
+        
+    Example:
+        >>> text = "What suppliers are in the East region?"
+        >>> embedding = get_embedding(text)
+        DEBUG: Generated embedding of size 384 for text: What suppliers...
     """
     try:
         # Ensure text is string and handle empty input

@@ -4,6 +4,26 @@ from app.utils import parse_timestamp
 # From your original code: extract_time_range, extract_metric_conditions, extract_pagination_info, extract_entity_references, analyze_query_intent
 
 def extract_time_range(query):
+    """
+    Extract temporal range information from a query string.
+    
+    Args:
+        query (str): User query string
+        
+    Returns:
+        dict: Time range information containing:
+            - start: Start datetime
+            - end: End datetime
+            - type: 'exact', 'relative', or 'named'
+            - unit: Time unit for relative ranges
+            - amount: Numeric amount for relative ranges
+            - period: Named period (e.g., 'week', 'month')
+            
+    Patterns Recognized:
+        - Exact: "between 2024-01-01 and 2024-02-01"
+        - Relative: "last 7 days", "last 2 weeks"
+        - Named: "this week", "this month"
+    """
     query_lower = query.lower()
     # exact date range
     match = re.search(r'between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})', query_lower)
@@ -60,6 +80,23 @@ def extract_time_range(query):
     return None
 
 def extract_metric_conditions(query):
+    """
+    Extract metric-related conditions from a query string.
+    
+    Args:
+        query (str): User query string
+        
+    Returns:
+        dict: Metric conditions containing:
+            - aggregation: Type of aggregation (average, maximum, etc.)
+            - metric: Name of the metric
+            - comparison: Comparison details (type and value)
+            
+    Patterns Recognized:
+        - Aggregations: "average", "maximum", "minimum", "sum", "count"
+        - Metrics: "of [metric]", "[metric] values", "[metric] is"
+        - Comparisons: "greater than", "less than", "equal to"
+    """
     conditions = {}
     query_lower = query.lower()
     agg_patterns = {
@@ -104,6 +141,24 @@ def extract_metric_conditions(query):
     return conditions if conditions else None
 
 def extract_pagination_info(query):
+    """
+    Extract pagination-related information from a query string.
+    
+    Args:
+        query (str): User query string
+        
+    Returns:
+        dict: Pagination information containing:
+            - type: 'absolute', 'relative', or 'limit'
+            - page: Page number for absolute pagination
+            - direction: 'next' or 'previous' for relative pagination
+            - size: Number of results for limit pagination
+            
+    Patterns Recognized:
+        - Absolute: "page 5"
+        - Relative: "next page", "previous page"
+        - Limit: "show 10 results"
+    """
     query_lower = query.lower()
     match = re.search(r'page\s+(\d+)', query_lower)
     if match:
@@ -118,6 +173,25 @@ def extract_pagination_info(query):
     return None
 
 def extract_entity_references(query):
+    """
+    Extract entity references and filters from a query string.
+    
+    Args:
+        query (str): User query string
+        
+    Returns:
+        dict: Entity references containing:
+            - Key-value pairs from explicit assignments
+            - Typed references (type:value)
+            - ID references (#123)
+            - Entity-specific patterns (user, status, category)
+            
+    Patterns Recognized:
+        - Key-value: "key=value"
+        - Typed: "type:value"
+        - ID: "#123"
+        - Entity: "user john", "status active", "category books"
+    """
     references = {}
     for token in query.split():
         if '=' in token:
@@ -150,7 +224,23 @@ def analyze_query_intent(query):
         query (str): User query string
         
     Returns:
-        dict: Intent analysis with primary and all intents
+        dict: Intent analysis containing:
+            - primary_intent: Main query intent
+            - all_intents: List of all detected intents
+            
+    Intent Types:
+        - temporal: Time-based queries
+        - aggregation: Metric aggregations
+        - entity: Entity relationships
+        - state: State transitions
+        - general: Default fallback
+        
+    Process:
+        1. Checks for temporal patterns
+        2. Identifies metric/aggregation patterns
+        3. Detects entity relationships
+        4. Looks for state transitions
+        5. Determines primary intent based on priority
     """
     query_lower = query.lower()
     intents = set()
@@ -247,7 +337,11 @@ def extract_filters_from_query(query):
         query (str): Query string to parse
         
     Returns:
-        dict: Extracted filters
+        dict: Extracted filters as key-value pairs
+        
+    Example:
+        >>> filters = extract_filters_from_query("show items where status=active and region=east")
+        {'status': 'active', 'region': 'east'}
     """
     filters = {}
     tokens = query.split()
@@ -265,7 +359,14 @@ def get_system_prompt(query_intent):
         query_intent (dict): Dictionary containing primary_intent and all_intents
         
     Returns:
-        str: Customized system prompt
+        str: Customized system prompt for the query type
+        
+    Intents:
+        - temporal: Focus on time-based relationships
+        - aggregation: Focus on numerical analysis
+        - entity: Focus on relationships
+        - state: Focus on transitions
+        - general: Default helpful assistant
     """
     base_prompt = "You are a helpful assistant that answers questions based on the provided context."
     

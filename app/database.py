@@ -4,13 +4,16 @@ from datetime import datetime
 
 def get_file_info(conn):
     """
-    Get stored file metadata from database.
+    Retrieves stored file metadata from the database.
     
     Args:
         conn: PostgreSQL database connection
         
     Returns:
-        dict: Mapping of filenames to (hash, modified_time) tuples
+        dict: Mapping of filenames to tuples of (hash, modified_time)
+        
+    Note:
+        Used to detect changes in JSON files between runs
     """
     cur = conn.cursor()
     cur.execute("SELECT filename, file_hash, last_modified FROM file_metadata;")
@@ -19,13 +22,16 @@ def get_file_info(conn):
 
 def upsert_file_metadata(conn, filename, file_hash, mod_time):
     """
-    Update or insert file metadata.
+    Updates or inserts file metadata in the database.
     
     Args:
         conn: PostgreSQL database connection
         filename (str): Name of file
         file_hash (str): Hash of file contents
         mod_time (datetime): Last modification time
+        
+    Note:
+        Uses UPSERT (INSERT ... ON CONFLICT) to handle both new and existing files
     """
     cur = conn.cursor()
     query = """
@@ -40,7 +46,7 @@ def upsert_file_metadata(conn, filename, file_hash, mod_time):
 
 def get_files_to_process(conn, compute_file_hash, get_json_files):
     """
-    Get list of files that need processing.
+    Gets list of files that need processing based on changes.
     
     Args:
         conn: PostgreSQL database connection
@@ -49,6 +55,11 @@ def get_files_to_process(conn, compute_file_hash, get_json_files):
         
     Returns:
         list: Tuples of (filename, hash, modified_time) for files needing processing
+        
+    Process:
+        1. Gets existing file metadata from database
+        2. Compares with current files on disk
+        3. Returns files that are new or have changed
     """
     existing_info = get_file_info(conn)
     files = get_json_files()
@@ -67,10 +78,14 @@ def get_files_to_process(conn, compute_file_hash, get_json_files):
 
 def reset_database(conn):
     """
-    Reset the database by truncating all tables.
+    Resets the database by truncating all tables.
     
     Args:
         conn: PostgreSQL database connection
+        
+    Note:
+        Requires user confirmation before proceeding
+        Handles errors with rollback
     """
     print("Warning: This will delete all stored embeddings and metadata.")
     confirmation = input("Are you sure you want to reset the database? (yes/no): ")
@@ -96,9 +111,22 @@ def reset_database(conn):
         cur.close()
 
 def init_db(conn):
+    """
+    Initializes database schema by creating required tables.
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Tables Created:
+        - json_chunks: Stores document chunks and their embeddings
+        - file_metadata: Tracks file changes
+        - chunk_key_values: Stores searchable key-value pairs
+        
+    Note:
+        Uses CREATE TABLE IF NOT EXISTS for idempotency
+    """
     cur = conn.cursor()
     # Create tables if not exist, indexing, etc.
-    # This was partially in the original code; adapt as needed.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS json_chunks (
             id TEXT PRIMARY KEY,

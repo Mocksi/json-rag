@@ -6,6 +6,23 @@ from app.parsing import extract_entities, json_to_path_chunks, extract_key_value
 from app.config import MAX_CHUNKS
 
 def load_and_embed_new_data(conn):
+    """
+    Processes new or modified JSON files, extracts entities and relationships,
+    generates embeddings, and stores them in the database.
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Returns:
+        bool: True if processing was successful, None if no files to process
+        
+    Flow:
+        1. Identifies new/modified JSON files
+        2. Validates and extracts entities
+        3. Generates chunks with context
+        4. Creates embeddings
+        5. Stores in database with key-value pairs
+    """
     from app.retrieval import get_relevant_chunks
     from app.database import get_files_to_process
     to_process = get_files_to_process(conn, compute_file_hash, get_json_files)
@@ -154,13 +171,26 @@ def load_and_embed_new_data(conn):
 
 def initialize_embeddings(conn):
     """
-    Initialize embeddings for all JSON files in the data directory.
+    Initializes embeddings for all JSON files in the data directory.
     Called after database reset or when changes are detected.
+    
+    Args:
+        conn: PostgreSQL database connection
     """
     print("Initializing embeddings for all JSON files...")
     load_and_embed_new_data(conn)
 
 def chat_loop(conn):
+    """
+    Runs the main interactive chat loop, processing user queries and returning answers.
+    Automatically checks for and processes new/modified files before each query.
+    
+    Args:
+        conn: PostgreSQL database connection
+        
+    Commands:
+        :quit - Exits the chat loop
+    """
     print("Enter your queries below. Type ':quit' to exit.")
     while True:
         user_input = input("You: ")

@@ -13,7 +13,19 @@ def detect_relationships(chunks):
         chunks (list): List of chunk dictionaries containing entity information
         
     Returns:
-        dict: Detected relationships between entities
+        dict: Detected relationships containing:
+            - direct: Dictionary of direct ID-based relationships
+            - semantic: Dictionary of similarity-based relationships
+            - entity_registry: Registry of all found entities
+            
+    Process:
+        1. First pass: Extract key-value pairs and build entity registry
+        2. Second pass: Compute semantic relationships using embeddings
+        3. Combines both types of relationships with confidence scores
+        
+    Note:
+        Direct relationships are found through ID references
+        Semantic relationships use embedding similarity above SIMILARITY_THRESHOLD
     """
     # Initialize relationship tracking
     direct_relations = defaultdict(list)
@@ -125,6 +137,10 @@ def compute_similarity(embedding1, embedding2):
         
     Returns:
         float: Similarity score between 0 and 1
+        
+    Note:
+        Uses numpy's dot product and norm functions for efficient computation
+        Higher scores indicate more similar embeddings
     """
     import numpy as np
     

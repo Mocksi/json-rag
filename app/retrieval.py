@@ -18,15 +18,19 @@ from app.utils import get_json_files
 
 def get_relevant_chunks(conn, query, top_k=5):
     """
-    Retrieve most relevant chunks for a query using vector similarity.
+    Retrieve most relevant chunks for a query using vector similarity search.
     
     Args:
         conn: PostgreSQL database connection
-        query (str): Query string
-        top_k (int): Number of results to return
+        query (str): User's query string
+        top_k (int): Maximum number of chunks to return (default: 5)
         
     Returns:
-        list: Retrieved chunks ordered by relevance
+        list: Retrieved chunks ordered by relevance score
+        
+    Note:
+        Uses cosine similarity between query embedding and stored chunk embeddings.
+        Includes debug output for query processing and chunk scores.
     """
     print(f"\nDEBUG: Processing query: '{query}'")
     cur = conn.cursor()
