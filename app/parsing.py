@@ -5,6 +5,7 @@ from datetime import datetime
 from collections import defaultdict
 from app.utils import parse_timestamp, classify_path
 from app.models import FlexibleModel
+from typing import Dict, List, Tuple
 
 def serialize_value(value):
     """
@@ -331,129 +332,97 @@ def iterate_paths(json_obj, current_path="$"):
             if isinstance(value, (dict, list)):
                 yield from iterate_paths(value, new_path)
 
-def json_to_path_chunks(json_obj, entities=None):
+def json_to_path_chunks(
+    json_obj: Dict, 
+    file_path: str = '', 
+    max_chunks: int = 100,
+    entities: Dict = None,
+    archetypes: List[Tuple[str, float]] = None
+) -> List[Dict]:
     """
-    Converts a JSON object into a list of path-based chunks.
+    Convert a JSON object into chunks based on paths and values.
     
     Args:
         json_obj: JSON object to chunk
-        entities (dict, optional): Pre-extracted entity information
+        file_path: Path to source file (default: '')
+        max_chunks: Maximum number of chunks to generate (default: 100)
+        entities: Dictionary of entity information (default: None)
+        archetypes: List of (archetype, confidence) tuples (default: None)
         
     Returns:
-        list: Chunks with:
-            - path: JSONPath location
-            - value: Serialized value
-            - context: Hierarchical context
-            - display_names: Human-readable names
-            - entities: Related entity information
+        list: List of chunk dictionaries with paths, values, and metadata
     """
     chunks = []
-    for path, value in iterate_paths(json_obj):
-        chunk = {
-            "path": path,
-            "value": serialize_value(value),
-            "context": extract_context(json_obj, path),
-            "display_names": extract_display_names(json_obj, path),
-            "entities": extract_entities_with_names(entities, path) if entities else {}
-        }
-        chunks.append(chunk)
-    return chunks
-
-def extract_key_value_pairs(chunk_text):
-    """
-    Extract searchable key-value pairs from structured JSON chunk.
     
-    Args:
-        chunk_text (str): JSON string containing chunk data
-        
-    Returns:
-        dict: Extracted key-value pairs for indexing
-    """
+    def process_value(obj, path='', context=None):
+        if context is None:
+            context = {}
+            
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                new_path = f"{path}.{k}" if path else k
+                process_value(v, new_path, {**context, k: v})
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                new_path = f"{path}[{i}]"
+                process_value(item, new_path, context)
+        else:
+            chunk = {
+                'path': path,
+                'value': obj,
+                'context': context
+            }
+            if entities:
+                chunk['entities'] = entities
+            if archetypes:
+                chunk['archetypes'] = archetypes
+            chunks.append(chunk)
+            
+    process_value(json_obj)
+    return chunks[:max_chunks]
+
+def extract_key_value_pairs(chunk_data):
+    """Extract searchable key-value pairs from chunk data."""
     pairs = {}
+    
+    def extract_nested_ids(data, prefix=''):
+        """Recursively extract IDs from nested structures."""
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if any(id_type in k for id_type in ['_id', 'supplier', 'product', 'warehouse', 'shipment']):
+                    pairs[f"{prefix}{k}"] = str(v)
+                if isinstance(v, (dict, list)):
+                    extract_nested_ids(v, f"{prefix}{k}_")
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                extract_nested_ids(item, f"{prefix}{i}_")
+    
     try:
-        data = json.loads(chunk_text)
+        # If chunk_data is not a dict, treat it as a value
+        if not isinstance(chunk_data, dict):
+            pairs['value'] = str(chunk_data)
+            return pairs
+            
+        # Process the main chunk data
+        data = chunk_data
         
-        # Extract path information
-        path = data.get('path', '')
-        pairs['path'] = path
-        path_parts = path.split('.')
-        if len(path_parts) > 1:
-            pairs['path_root'] = path_parts[0]
-            pairs['path_leaf'] = path_parts[-1]
-        
-        # Extract value information
+        # Extract path and value
+        if 'path' in data:
+            pairs['path'] = data['path']
         if 'value' in data:
-            value_data = data['value']
-            pairs['value_type'] = value_data.get('type', 'unknown')
+            pairs['value'] = str(data['value'])
             
-            if value_data['type'] == 'primitive':
-                val = value_data.get('value')
-                if isinstance(val, (int, float, str)):
-                    pairs['value'] = str(val)
-                    pairs['python_type'] = value_data.get('python_type', '')
-                    
-                    if isinstance(val, (int, float)):
-                        pairs['value_exact'] = val
-                        pairs[f"value_gt_{val-1}"] = True
-                        pairs[f"value_lt_{val+1}"] = True
-        
-        # Extract temporal metadata
-        if 'temporal_metadata' in data:
-            temporal = data['temporal_metadata']
-            for key in ['timestamp', 'year', 'month', 'day', 'weekday']:
-                if key in temporal:
-                    pairs[key] = temporal[key]
-            
-            # Add date-based filters
-            if 'timestamp' in temporal:
-                try:
-                    date = parse_timestamp(temporal['timestamp'])
-                    if date:
-                        pairs['date_year'] = date.year
-                        pairs['date_month'] = date.month
-                        pairs['date_day'] = date.day
-                        pairs['is_weekend'] = date.weekday() >= 5
-                except Exception:
-                    pass
-        
-        # Extract numeric metadata
-        if 'numeric_metadata' in data:
-            numeric = data['numeric_metadata']
-            if 'value_exact' in numeric:
-                pairs['numeric_value'] = numeric['value_exact']
-                if 'value_range' in numeric:
-                    range_data = numeric['value_range']
-                    pairs['value_min'] = range_data.get('min', '')
-                    pairs['value_max'] = range_data.get('max', '')
-            if 'magnitude' in numeric:
-                pairs['magnitude'] = numeric['magnitude']
-        
-        # Extract string metadata
-        if 'string_metadata' in data:
-            string_meta = data['string_metadata']
-            pairs['string_length'] = string_meta.get('length', 0)
-            pairs['has_numbers'] = string_meta.get('contains_numbers', False)
-            pairs['has_urls'] = string_meta.get('contains_urls', False)
-        
-        # Extract context information
+        # Process context recursively
         if 'context' in data:
+            extract_nested_ids(data['context'])
+            
+            # Also store direct context values
             for key, value in data['context'].items():
                 if isinstance(value, (str, int, float)):
                     pairs[f"context_{key}"] = str(value)
         
-        # Extract entity information
-        if 'entities' in data:
-            for entity_id, entity_data in data['entities'].items():
-                entity_type = entity_data.get('type', 'unknown')
-                pairs[f"entity_{entity_id}"] = entity_type
-                pairs[f"has_entity_type_{entity_type}"] = True
-                
-                for attr_key, attr_value in entity_data.get('attributes', {}).items():
-                    if isinstance(attr_value, (str, int, float)):
-                        pairs[f"entity_{entity_id}_{attr_key}"] = str(attr_value)
-    
-    except json.JSONDecodeError as e:
-        print(f"Error decoding chunk JSON: {e}")
+        print(f"DEBUG: Extracted pairs: {pairs}")
+        
     except Exception as e:
         print(f"Error extracting key-value pairs: {e}")
     

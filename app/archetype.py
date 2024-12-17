@@ -30,32 +30,77 @@ class ArchetypeDetector:
         self.temporal_fields = set()
         self.numerical_fields = set()
         
+        # Add timestamp pattern matching
+        self.timestamp_patterns = [
+            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}',  # ISO 8601
+            r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',  # ISO-like datetime
+            r'\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}',  # Common datetime
+            r'\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}',  # US datetime
+            r'\d{4}-\d{2}-\d{2}',                     # ISO date
+            r'\d{2}/\d{2}/\d{4}',                     # US date
+            r'\d{4}/\d{2}/\d{2}'                      # Alternative date
+        ]
+        
+        # Add HTTP status patterns
+        self.http_status_patterns = [
+            r'^[1-5][0-9]{2}$',           # Basic HTTP status codes
+            r'2\d{2}',                     # Success codes (200-299)
+            r'3\d{2}',                     # Redirect codes (300-399)
+            r'4\d{2}',                     # Client error codes (400-499)
+            r'5\d{2}'                      # Server error codes (500-599)
+        ]
+        
     def detect_dataset_patterns(self, structures: List[Dict]) -> Dict:
-        """Analyze entire dataset to detect common patterns and archetypes."""
+        """
+        Analyze the entire dataset to detect patterns and relationships.
+        
+        Args:
+            structures: List of JSON structures to analyze.
+            
+        Returns:
+            dict: Detected archetypes and interrelationships with:
+                - archetypes: List of archetype matches per structure
+                - relationships: List of detected relationships
+                
+        Example:
+            >>> detector = ArchetypeDetector()
+            >>> data = [
+            ...     {
+            ...         "event": "login",
+            ...         "timestamp": "2024-03-16T10:30:00Z",
+            ...         "user_id": "u123"
+            ...     },
+            ...     {
+            ...         "user": {"id": "u123", "name": "Alice"}
+            ...     }
+            ... ]
+            >>> results = detector.detect_dataset_patterns(data)
+            >>> print("Archetypes:", results["archetypes"])
+            >>> print("Relationships:", results["relationships"])
+        """
         print("\nAnalyzing dataset-wide patterns...")
         
-        # Collect patterns across all structures
+        archetype_results = []
+        relationships = []
+
         for data in structures:
             self._analyze_structure(data)
-            
-        # Core JSON archetypes that inform data usage patterns
-        dataset_archetypes = {
-            'record': self._detect_record_pattern(),      # Individual entities with properties
-            'event': self._detect_event_pattern(),        # Time-based occurrences with context
-            'collection': self._detect_collection_pattern(), # Lists of similar items
-            'reference': self._detect_reference_pattern(), # Objects that primarily link to others
-            'metric': self._detect_metric_pattern(),      # Numerical measurements/stats
-            'state': self._detect_state_pattern(),        # Current status/configuration
-            'document': self._detect_document_pattern()    # Nested, hierarchical content
+            archetypes = self.detect_archetypes(data)
+            archetype_results.append(archetypes)
+            relationships.extend(self.detect_relationships(data))
+
+        print("\nArchetype Results:")
+        for i, result in enumerate(archetype_results):
+            print(f"Structure {i}: {result}")
+        
+        print("\nDetected Relationships:")
+        for rel in relationships:
+            print(f"{rel['source']} -> {rel['target']} ({rel['type']})")
+        
+        return {
+            "archetypes": archetype_results, 
+            "relationships": relationships
         }
-        
-        print("\nDataset analysis results:")
-        for archetype, details in dataset_archetypes.items():
-            if details['confidence'] > 0.3:
-                print(f"- {archetype}: {details['confidence']:.2f} confidence")
-                print(f"  Common fields: {', '.join(details['common_fields'])}")
-        
-        return dataset_archetypes
     
     def _detect_record_pattern(self) -> Dict:
         """Detect record patterns - objects representing distinct entities."""
@@ -277,37 +322,52 @@ class ArchetypeDetector:
         analyze_recursive(json_obj)
         return analysis
 
-    def detect_archetype(self, data: Dict) -> Tuple[str, float]:
+    def detect_archetypes(self, data: Dict) -> List[Tuple[str, float]]:
         """
-        Detect the archetype of a JSON object and return type and confidence.
+        Detect all matching archetypes for a JSON object and return sorted types and scores.
         
         Args:
-            data: JSON object to analyze
+            data: JSON object to analyze.
             
         Returns:
-            tuple: (archetype_type, confidence_score)
+            list: Sorted list of (archetype, confidence_score) tuples.
             
         Example:
             >>> detector = ArchetypeDetector()
             >>> data = {
             ...     "timestamp": "2024-03-16T10:30:00Z",
             ...     "event": "user_login",
-            ...     "status": "success"
+            ...     "status": "success",
+            ...     "metrics": {"duration_ms": 150}
             ... }
-            >>> archetype, confidence = detector.detect_archetype(data)
-            >>> print(f"Detected {archetype} with {confidence:.2f} confidence")
+            >>> archetypes = detector.detect_archetypes(data)
+            >>> for archetype, confidence in archetypes:
+            ...     print(f"Detected {archetype} with {confidence:.2f} confidence")
             Detected event_log with 0.90 confidence
+            Detected metric_data with 0.45 confidence
         """
+        print("detect_archetypes called with data:", data)  # Added debug print
+        
         scores = {
             'event_log': self._score_event_log(data),
             'metric_data': self._score_metric_data(data),
             'api_response': self._score_api_response(data),
             'state_machine': self._score_state_machine(data),
-            'entity_collection': self._score_entity_collection(data)
+            'entity_collection': self._score_entity_collection(data),
+            'transaction_data': self._score_transaction_pattern(data)
         }
         
-        best_archetype = max(scores.items(), key=lambda x: x[1])
-        return best_archetype[0], best_archetype[1]
+        # Add debug print for raw scores
+        print(f"Raw scores: {scores}")
+        
+        # Only keep high-confidence matches
+        detected = [(atype, score) for atype, score in scores.items() if score > 0.2]
+        detected_sorted = sorted(detected, key=lambda x: x[1], reverse=True)
+        
+        # Add print statement to show detected archetypes
+        print(f"Detected archetypes: {detected_sorted} for data: {json.dumps(data, indent=2)}")
+        
+        return detected_sorted  # Added return statement
 
     def _score_event_log(self, data: Dict) -> float:
         """Score likelihood of being an event log entry."""
@@ -462,41 +522,34 @@ class ArchetypeDetector:
         return bool(value_fields & set(pattern_fields))
 
     def _analyze_structure(self, data: Any, path: str = "") -> None:
-        """Recursively analyze data structure and collect patterns."""
+        """
+        Recursively analyze data structure, chunk it, and detect archetypes at each level.
+        
+        Args:
+            data: The data structure to analyze (dict, list, or primitive)
+            path: Current path in the JSON structure (default: "")
+            
+        Note:
+            - Updates field_frequencies for pattern detection
+            - Detects archetypes at each nested level
+            - Prints matching archetypes for each chunk
+        """
         if isinstance(data, dict):
-            # Record field names and their types
             for key, value in data.items():
+                current_path = f"{path}.{key}" if path else key
                 self.field_frequencies[key] += 1
                 
-                # Track both field name and type
-                type_name = type(value).__name__
-                self.type_frequencies[f"{key}:{type_name}"] += 1
-                
-                # Track actual values for specific fields
-                if key in {'status', 'state', 'type'}:
-                    self.value_patterns[key].add(str(value))
-                
-                # Track date/time strings
-                if isinstance(value, str):
-                    if any(pattern in value.lower() for pattern in 
-                          ['date', 'time', '2024-', '2023-']):
-                        self.temporal_fields.add(key)
-                
-                # Track numerical fields
-                if isinstance(value, (int, float)):
-                    self.numerical_fields.add(key)
-                
-                # Recursively analyze nested structures
+                # Detect archetypes for each sub-object
                 if isinstance(value, (dict, list)):
-                    new_path = f"{path}.{key}" if path else key
-                    self._analyze_structure(value, new_path)
-                    
-        elif isinstance(data, list) and data:
-            # For lists, analyze the first few items as representative samples
-            for item in data[:3]:  # Limit to first 3 items for efficiency
-                if isinstance(item, (dict, list)):
-                    new_path = f"{path}[*]"
-                    self._analyze_structure(item, new_path)
+                    self._analyze_structure(value, current_path)
+                else:
+                    print(f"Analyzing path: {current_path} -> {value}")
+                    archetypes = self.detect_archetypes({key: value})
+                    print(f"Detected archetypes at {current_path}: {archetypes}")
+        elif isinstance(data, list):
+            for index, item in enumerate(data):
+                current_path = f"{path}[{index}]"
+                self._analyze_structure(item, current_path)
 
     def analyze_patterns(self, data: Dict) -> None:
         """
@@ -520,31 +573,86 @@ class ArchetypeDetector:
         if self._detect_collection_pattern()['confidence'] > 0.5:
             self.patterns['collection'] += 1
 
-    def _detect_transaction_pattern(self) -> Dict:
-        """Detect transaction patterns - business events with multiple entities."""
-        transaction_indicators = {
-            'order', 'payment', 'transaction', 'invoice',
-            'purchase', 'sale', 'transfer', 'shipment'
+    def _score_transaction_pattern(self, data: Dict) -> float:
+        """Score likelihood of being a transaction pattern."""
+        score = 0.0
+        
+        # Check for transaction-related fields
+        transaction_keywords = {
+            'transaction', 'order', 'payment', 'invoice', 'purchase',
+            'sale', 'shipment', 'total', 'amount', 'price'
         }
-        found = set(self.field_frequencies.keys()) & transaction_indicators
+        has_transaction_fields = any(key in transaction_keywords for key in data.keys())
+        if has_transaction_fields:
+            score += 0.4
         
-        # Check for transaction-specific fields
-        has_amount = bool(self.numerical_fields & {'amount', 'total', 'price'})
-        has_parties = bool(set(self.field_frequencies.keys()) & 
-                          {'buyer', 'seller', 'customer', 'supplier'})
+        # Check for numerical fields (e.g., amounts or quantities)
+        numerical_fields = sum(1 for v in data.values() if isinstance(v, (int, float)))
+        if numerical_fields > 0:
+            score += 0.3
         
-        confidence = len(found) / len(transaction_indicators)
-        if has_amount and has_parties:
-            confidence *= 2.0  # Boost if we have both amount and parties
-        elif has_amount or has_parties:
-            confidence *= 1.5  # Boost if we have either amount or parties
+        # Check for references to parties (e.g., buyer/seller, customer/supplier)
+        party_keywords = {'buyer', 'seller', 'customer', 'supplier', 'party'}
+        has_party_fields = any(key in party_keywords for key in data.keys())
+        if has_party_fields:
+            score += 0.3
+
+        return score
+
+    def detect_relationships(self, data: Dict, parent_key: Optional[str] = None) -> List[Dict]:
+        """
+        Detect relationships between archetypes within a JSON file.
         
-        return {
-            'confidence': confidence,
-            'common_fields': list(found),
-            'pattern': 'transaction_pattern',
-            'usage': 'Represents business events with multiple entities'
-        }
+        Args:
+            data: JSON object to analyze.
+            parent_key: Key to track hierarchical relationships.
+            
+        Returns:
+            list: Relationships detected with source, target, and type.
+            
+        Example:
+            >>> detector = ArchetypeDetector()
+            >>> data = {
+            ...     "user": {
+            ...         "id": "u123",
+            ...         "team_id": "t456"
+            ...     },
+            ...     "team": {
+            ...         "id": "t456",
+            ...         "parent_id": "org789"
+            ...     }
+            ... }
+            >>> relationships = detector.detect_relationships(data)
+            >>> for rel in relationships:
+            ...     print(f"{rel['source']} -> {rel['target']} ({rel['type']})")
+            user -> id (key-based)
+            user -> team_id (key-based)
+            team -> id (key-based)
+            team -> parent_id (key-based)
+        """
+        relationships = []
+        
+        def find_links(obj, parent=None):
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_key = f"{parent}.{key}" if parent else key
+                    
+                    # Key-based relationships
+                    if key.endswith("_id") or key in {"id", "ref", "parent_id"}:
+                        relationships.append({
+                            "source": parent, 
+                            "target": key, 
+                            "type": "key-based"
+                        })
+                    
+                    # Recurse through sub-objects
+                    find_links(value, current_key)
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    find_links(item, f"{parent}[{i}]")
+        
+        find_links(data)
+        return relationships
 
 def detect_data_patterns(json_obj: dict) -> Dict:
     """

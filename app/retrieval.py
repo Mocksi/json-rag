@@ -1,92 +1,199 @@
+from typing import List, Dict, Optional, Tuple
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 import re
 import statistics
+import openai
 
 from app.config import MAX_CHUNKS
 from app.utils import parse_timestamp
-from app.embedding import vector_search_with_filter
+from app.embedding import get_embedding, vector_search_with_filter
 from app.parsing import json_to_path_chunks, extract_entities
 from app.intent import analyze_query_intent, extract_filters_from_query, get_system_prompt
-from app.database import get_files_to_process, upsert_file_metadata, init_db
+from app.database import get_files_to_process, upsert_file_metadata, init_db, get_chunk_archetypes, get_chunk_relationships
 from app.config import embedding_model
 from app.utils import get_json_files
+from app.archetype import ArchetypeDetector
 
 # Include your retrieval logic: get_relevant_chunks, hybrid_retrieval, hierarchical_retrieval, etc.
 # We'll place get_relevant_chunks and others here:
 
-def get_relevant_chunks(conn, query, top_k=5):
-    """
-    Retrieve most relevant chunks for a query using vector similarity search.
-    
-    Args:
-        conn: PostgreSQL database connection
-        query (str): User's query string
-        top_k (int): Maximum number of chunks to return (default: 5)
-        
-    Returns:
-        list: Retrieved chunks ordered by relevance score
-        
-    Note:
-        Uses cosine similarity between query embedding and stored chunk embeddings.
-        Includes debug output for query processing and chunk scores.
-    """
-    print(f"\nDEBUG: Processing query: '{query}'")
+def get_relevant_chunks(conn, query: str, top_k: int = 5) -> List[Dict]:
+    """Get relevant chunks with enriched context including multi-level relationships."""
     cur = conn.cursor()
     
-    # Generate and log query embedding
-    query_embedding = embedding_model.encode([query])[0]
-    print(f"DEBUG: Generated embedding of size {len(query_embedding)}")
+    # Get query archetype
+    detector = ArchetypeDetector()
+    query_archetype = detector.detect_archetypes({'query': query})
+    query_embedding = get_embedding(query, query_archetype)
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
     
-    # Enhanced query with scores and IDs
-    search_query = f"""
-    SELECT id, chunk_text::text, embedding <-> '{embedding_str}' as score
-    FROM json_chunks
-    ORDER BY score
-    LIMIT {top_k};
-    """
+    # Enhanced SQL query with archetype-aware relationship traversal and scoring
+    cur.execute("""
+        WITH RECURSIVE relationship_chain AS (
+            -- Base case: direct relationships
+            SELECT 
+                source_chunk_id,
+                target_chunk_id,
+                relationship_type,
+                metadata,
+                ARRAY[source_chunk_id]::varchar[] as path,
+                1 as depth,
+                -- Track archetype path
+                ARRAY[(
+                    SELECT archetype::varchar 
+                    FROM chunk_archetypes 
+                    WHERE chunk_id = source_chunk_id 
+                    ORDER BY confidence DESC 
+                    LIMIT 1
+                )]::varchar[] as archetype_path,
+                -- Add archetype-based scoring
+                CASE 
+                    WHEN EXISTS (
+                        SELECT 1 FROM chunk_archetypes 
+                        WHERE chunk_id = source_chunk_id 
+                        AND archetype = %s
+                    ) THEN 0.8
+                    ELSE 0.5
+                END as archetype_score
+            FROM chunk_relationships
+            
+            UNION ALL
+            
+            -- Recursive case
+            SELECT 
+                r.source_chunk_id,
+                r.target_chunk_id,
+                r.relationship_type,
+                r.metadata,
+                (rc.path || r.target_chunk_id)::varchar[],
+                rc.depth + 1,
+                (rc.archetype_path || (
+                    SELECT archetype::varchar 
+                    FROM chunk_archetypes 
+                    WHERE chunk_id = r.target_chunk_id 
+                    ORDER BY confidence DESC 
+                    LIMIT 1
+                ))::varchar[],
+                rc.archetype_score * 0.9  -- Decay score with depth
+            FROM chunk_relationships r
+            JOIN relationship_chain rc ON r.source_chunk_id = rc.target_chunk_id
+            WHERE rc.depth < CASE 
+                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'entity_definition' THEN 4
+                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'event' THEN 3
+                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'metric' THEN 2
+                ELSE 2
+            END
+            AND NOT r.target_chunk_id = ANY(rc.path)
+        )
+        SELECT 
+            c.id,
+            c.chunk_json,
+            c.metadata,
+            (c.embedding <=> %s::vector) * COALESCE(MIN(rc.archetype_score), 1.0) as distance,
+            array_agg(DISTINCT jsonb_build_object(
+                'type', rc.relationship_type,
+                'target', rc.target_chunk_id,
+                'metadata', rc.metadata,
+                'archetype_path', rc.archetype_path
+            )) FILTER (WHERE rc.relationship_type IS NOT NULL) as relationships
+        FROM json_chunks c
+        LEFT JOIN relationship_chain rc ON c.id = rc.source_chunk_id
+        GROUP BY c.id, c.chunk_json, c.metadata, c.embedding
+        ORDER BY distance ASC
+        LIMIT %s
+    """, (
+        query_archetype[0][0] if query_archetype else 'unknown',  # First archetype type
+        embedding_str,
+        top_k
+    ))
     
-    cur.execute(search_query)
     results = cur.fetchall()
     
-    # Log retrieval results
-    print("\nDEBUG: Retrieved chunks:")
-    retrieved_texts = []
-    for chunk_id, chunk_text, score in results:
-        print(f"Chunk {chunk_id}: score = {score:.4f}")
-        retrieved_texts.append(chunk_text)
+    # Format results with enriched context
+    enriched_chunks = []
+    for id, chunk_json, metadata, distance, relationships in results:
+        enriched_chunk = {
+            'id': id,
+            'content': chunk_json,
+            'relevance_score': 1 - distance,
+            'metadata': metadata,
+            'relationships': relationships if relationships else []
+        }
+        enriched_chunks.append(enriched_chunk)
+        print(f"\nDEBUG: Retrieved chunk {id} with {len(relationships) if relationships else 0} relationships")
     
     cur.close()
-    return retrieved_texts
+    return enriched_chunks
 
-def build_prompt(query, retrieved_texts, query_intent):
-    """
-    Build a prompt for the LLM using retrieved context and query intent.
+def build_prompt(query, retrieved_chunks, query_intent):
+    """Build a prompt for the LLM using retrieved context and query intent."""
     
-    Args:
-        query (str): User's query
-        retrieved_texts (list): List of relevant text chunks
-        query_intent (dict): Query intent analysis results
+    # Format chunks based on content type
+    formatted_chunks = []
+    for chunk in retrieved_chunks:
+        if isinstance(chunk, dict):
+            if chunk.get('type') == 'metric_aggregation':
+                # Format aggregated metrics
+                metrics = chunk.get('content', {})
+                formatted_chunks.append("Aggregated Metrics:")
+                for metric, stats in metrics.items():
+                    formatted_chunks.append(f"- {metric}:")
+                    for stat, value in stats.items():
+                        formatted_chunks.append(f"  {stat}: {value}")
+            
+            elif chunk.get('type') == 'relationship_graph':
+                # Format relationship data
+                relationships = chunk.get('content', {})
+                formatted_chunks.append("Entity Relationships:")
+                for entity_id, relations in relationships.items():
+                    formatted_chunks.append(f"- Entity {entity_id} connections:")
+                    for rel in relations:
+                        formatted_chunks.append(f"  {rel['type']} -> {rel['related_id']}")
+            
+            else:
+                # Format regular content
+                content = chunk.get('content')
+                if content:
+                    formatted_chunks.append(json.dumps(content, indent=2))
+        else:
+            formatted_chunks.append(str(chunk))
+
+    context_str = "\n\n".join(formatted_chunks)
+    
+    # Build intent-specific guidelines
+    guidelines = [
+        "- Use specific details from the context",
+        "- Always use human-readable names in addition to IDs",
+        "- If information isn't in the context, say so"
+    ]
+    
+    if 'temporal' in query_intent['all_intents']:
+        guidelines.extend([
+            "- Preserve chronological order",
+            "- Include specific dates and times when available"
+        ])
         
-    Returns:
-        str: Formatted prompt for the LLM
-    """
-    context_str = "\n\n".join(retrieved_texts)
+    if 'aggregation' in query_intent['all_intents']:
+        guidelines.extend([
+            "- Include relevant metrics and their values",
+            "- Highlight significant patterns or trends"
+        ])
+        
+    if 'entity' in query_intent['all_intents']:
+        guidelines.extend([
+            "- Show relationships between entities",
+            "- Include relevant entity attributes"
+        ])
+
     prompt = f"""Use the provided context to answer the user's query.
 
-Context type: {query_intent['primary_intent']}
-Additional intents: {', '.join(query_intent['all_intents'])}
+Query Intent: {query_intent['primary_intent']}
+Additional Intents: {', '.join(query_intent['all_intents'])}
 
 Guidelines:
-- Focus on {query_intent['primary_intent']} aspects
-- Use specific details from the context
-- Always use human-readable names in addition to IDs when available
-- Show relationships between named entities
-- If information isn't in the context, say so
-- For temporal queries, preserve chronological order
-- For metrics, include specific values and trends
+{chr(10).join(guidelines)}
 
 Context:
 {context_str}
@@ -241,43 +348,70 @@ def temporal_retrieval(conn, query, top_k=20):
     results = cur.fetchall()
     return [r[0] for r in results]
 
-def metric_retrieval(conn, query, top_k=20):
-    cur = conn.cursor()
-    if "peak" in query.lower() and "network" in query.lower():
-        base_query = """
-        WITH numeric_chunks AS (
-            SELECT DISTINCT 
-                c.id,
-                c.chunk_text,
-                (c.chunk_text -> 'value' ->> 'value')::float as numeric_value
-            FROM json_chunks c
-            JOIN chunk_key_values kv ON c.id = kv.chunk_id
-            WHERE kv.key LIKE '%%network%%'
-                AND c.chunk_text -> 'value' ->> 'type' = 'primitive'
-                AND c.chunk_text -> 'value' ->> 'value' ~ '^[0-9]+\.?[0-9]*$'
-        ),
-        ranked_chunks AS (
-            SELECT *,
-                percent_rank() OVER (ORDER BY numeric_value DESC) as value_rank
-            FROM numeric_chunks
-        )
-        SELECT chunk_text::text
-        FROM ranked_chunks
-        WHERE value_rank <= 0.2
-        ORDER BY numeric_value DESC
-        LIMIT %s
-        """
-    else:
-        base_query = """
-        SELECT DISTINCT c.chunk_text::text
-        FROM json_chunks c
-        WHERE c.chunk_text -> 'value' ->> 'type' = 'primitive'
-            AND c.chunk_text -> 'value' ->> 'value' ~ '^[0-9]+\.?[0-9]*$'
-        LIMIT %s
-        """
-    cur.execute(base_query, (top_k,))
-    results = cur.fetchall()
-    return [r[0] for r in results]
+def metric_retrieval(conn, query: str, top_k: int = 5) -> List[str]:
+    """Retrieve and format metric data from relevant chunks."""
+    
+    chunks = get_relevant_chunks(conn, query, top_k)
+    context_entries = []
+    seen_entries = set()
+    
+    # Common metric indicators from archetype detector
+    metric_indicators = {
+        'value', 'amount', 'count', 'total', 'quantity',
+        'rate', 'percentage', 'score', 'ratio', 'stock',
+        'reserved', 'available', 'balance', 'level'
+    }
+    
+    def extract_metrics(obj, path="", parent_id=None):
+        """Extract metrics recursively from any JSON structure."""
+        if not isinstance(obj, dict):
+            return
+            
+        # Extract ID and metric values
+        current_id = None
+        metrics = {}
+        
+        for key, value in obj.items():
+            # Get ID if present
+            if key.endswith('_id') and isinstance(value, str):
+                current_id = value
+            
+            # Extract numeric values
+            if isinstance(value, (int, float)):
+                # Check if key indicates a metric
+                if any(indicator in key.lower() for indicator in metric_indicators):
+                    metrics[key] = value
+            
+            # Process nested structures
+            elif isinstance(value, dict):
+                extract_metrics(value, f"{path}.{key}", current_id or parent_id)
+            elif isinstance(value, list):
+                for i, item in enumerate(value):
+                    if isinstance(item, dict):
+                        extract_metrics(item, f"{path}[{i}]", current_id or parent_id)
+        
+        # Create entry if we found metrics
+        if metrics:
+            id_str = current_id or parent_id or "Unknown"
+            entry = f"Entity {id_str}: "
+            metrics_list = []
+            for key, value in metrics.items():
+                # Clean up key name
+                clean_key = key.replace('_', ' ').strip()
+                metrics_list.append(f"{clean_key}: {value}")
+            
+            entry += ", ".join(metrics_list)
+            if entry not in seen_entries:
+                seen_entries.add(entry)
+                context_entries.append(entry)
+    
+    # Process each chunk
+    for chunk in chunks:
+        if isinstance(chunk.get('content'), dict):
+            extract_metrics(chunk['content'])
+    
+    print(f"\nDEBUG: Generated {len(context_entries)} metric entries")
+    return context_entries
 
 def summarize_by_timewindow(retrieved_texts, window_size=timedelta(hours=1)):
     if not retrieved_texts:
@@ -358,44 +492,8 @@ def create_metric_summary(metric_name, texts):
         return None
 
 def summarize_metrics(retrieved_texts):
-    """
-    Summarize metric-related chunks with statistical analysis.
-    
-    Args:
-        retrieved_texts (list): List of chunk texts containing metrics
-        
-    Returns:
-        list: Summarized metric information
-    """
-    if not retrieved_texts:
-        return []
-        
-    print("\nDEBUG: Summarizing metrics from chunks:")
-    metrics = defaultdict(list)
-    other_chunks = []
-    
-    for i, text in enumerate(retrieved_texts):
-        try:
-            data = json.loads(text)
-            print(f"\nChunk {i}:")
-            print(f"Path: {data.get('path')}")
-            print(f"Value: {data.get('value')}")
-            
-            value_data = data.get('value', {})
-            if value_data.get('type') == 'primitive' and isinstance(value_data.get('value'), (int, float)):
-                metric_name = data.get('path', '').split('.')[-1]
-                metrics[metric_name].append(text)
-                print(f"Added to metric group: {metric_name}")
-            else:
-                other_chunks.append(text)
-                print("Added to other chunks (non-metric)")
-        except Exception as e:
-            print(f"Error processing chunk {i}: {e}")
-            other_chunks.append(text)
-    
-    print(f"\nDEBUG: Found {len(metrics)} metric groups:")
-    for metric_name, texts in metrics.items():
-        print(f"- {metric_name}: {len(texts)} values")
+    """Removed - no longer needed as metric_retrieval handles everything"""
+    return retrieved_texts
 
 def summarize_contexts(contexts):
     if not contexts:
@@ -482,23 +580,318 @@ def answer_query(conn, query):
     return completion.choices[0].message.content.strip()
 
 def hybrid_retrieval(conn, query, filters, top_k=20):
+    """Combine filter-based and semantic search with archetype-aware scoring."""
+    detector = ArchetypeDetector()
+    query_archetypes = detector.detect_archetypes({'query': query})
+    query_embedding = get_embedding(query, query_archetypes[0] if query_archetypes else None)
+    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    
+    # Build filter conditions
     filter_conditions = []
     filter_values = []
     for key, value in filters.items():
         filter_conditions.append(f"kv.key = %s AND kv.value = %s")
         filter_values.extend([key, str(value)])
-    filter_query = f"""
-    SELECT DISTINCT c.chunk_text::text
-    FROM json_chunks c
-    JOIN chunk_key_values kv ON c.id = kv.chunk_id
-    WHERE {' OR '.join(filter_conditions)}
+    
+    hybrid_query = """
+    WITH RECURSIVE relationship_chain AS (
+        -- Base case with archetype context
+        SELECT 
+            source_chunk_id,
+            target_chunk_id,
+            relationship_type,
+            metadata,
+            ARRAY[source_chunk_id] as path,
+            1 as depth,
+            ARRAY[(
+                SELECT archetype 
+                FROM chunk_archetypes 
+                WHERE chunk_id = source_chunk_id 
+                ORDER BY confidence DESC 
+                LIMIT 1
+            )] as archetype_path,
+            -- Initial relationship score
+            CASE 
+                WHEN relationship_type = 'reference' THEN 0.8
+                WHEN relationship_type IN ('before', 'after', 'during') THEN 0.7
+                WHEN relationship_type IN ('aggregates', 'breaks_down') THEN 0.9
+                ELSE 0.5
+            END as relationship_score
+        FROM chunk_relationships
+        
+        UNION ALL
+        
+        -- Recursive case with archetype-aware scoring
+        SELECT 
+            r.source_chunk_id,
+            r.target_chunk_id,
+            r.relationship_type,
+            r.metadata,
+            rc.path || r.target_chunk_id,
+            rc.depth + 1,
+            rc.archetype_path || (
+                SELECT archetype 
+                FROM chunk_archetypes 
+                WHERE chunk_id = r.target_chunk_id 
+                ORDER BY confidence DESC 
+                LIMIT 1
+            ),
+            -- Compound relationship score based on archetype rules
+            rc.relationship_score * CASE 
+                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'entity_definition' 
+                AND r.relationship_type = 'reference' THEN 0.9
+                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'event' 
+                AND r.relationship_type IN ('before', 'after', 'during') THEN 0.8
+                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'metric' 
+                AND r.relationship_type IN ('aggregates', 'breaks_down') THEN 0.95
+                ELSE 0.6
+            END
+        FROM chunk_relationships r
+        JOIN relationship_chain rc ON r.source_chunk_id = rc.target_chunk_id
+        WHERE rc.depth < CASE 
+            WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'entity_definition' THEN 4
+            WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'event' THEN 3
+            WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'metric' THEN 2
+            ELSE 2
+        END
+        AND NOT r.target_chunk_id = ANY(rc.path)
+    ),
+    scored_chunks AS (
+        SELECT 
+            c.id,
+            c.chunk_text,
+            c.metadata,
+            c.embedding <=> %s::vector as vector_score,
+            COALESCE(
+                (SELECT MAX(relationship_score) 
+                FROM relationship_chain 
+                WHERE source_chunk_id = c.id), 
+                0.5
+            ) as rel_score,
+            CASE 
+                WHEN c.metadata->'archetypes' @> %s::jsonb THEN 0.8
+                ELSE 1.0 
+            END as archetype_boost
+        FROM json_chunks c
+        WHERE EXISTS (
+            SELECT 1 FROM chunk_key_values kv 
+            WHERE kv.chunk_id = c.id 
+            AND ({' OR '.join(filter_conditions)})
+        )
+    )
+    SELECT 
+        id,
+        chunk_text,
+        metadata,
+        -- Combined scoring using vector similarity, relationship score, and archetype boost
+        (vector_score * 0.4 + (1 - rel_score) * 0.3 + archetype_boost * 0.3) as final_score
+    FROM scored_chunks
+    ORDER BY final_score ASC
+    LIMIT %s
+    """
+    
+    query_params = filter_values + [
+        embedding_str,
+        json.dumps([{'type': a[0]} for a in query_archetypes]) if query_archetypes else '[]',
+        top_k
+    ]
+    
+    cur = conn.cursor()
+    cur.execute(hybrid_query.format(' OR '.join(filter_conditions)), query_params)
+    results = cur.fetchall()
+    cur.close()
+    
+    return [
+        {
+            'id': r[0],
+            'content': r[1],
+            'metadata': r[2],
+            'score': 1 - r[3]
+        }
+        for r in results
+    ]
+
+def analyze_related_chunks(conn, query: str, base_chunks: List[Dict]) -> List[Dict]:
+    """
+    Analyze relationships between chunks and perform cross-reference calculations.
+    
+    Args:
+        conn: Database connection
+        query: Original query string
+        base_chunks: Initial retrieved chunks
+        
+    Returns:
+        List of enriched chunks with relationship data
     """
     cur = conn.cursor()
-    cur.execute(filter_query, filter_values)
-    filter_results = [r[0] for r in cur.fetchall()]
-    if len(filter_results) < top_k:
-        semantic_results = get_relevant_chunks(conn, query, top_k=top_k - len(filter_results))
-        combined_results = filter_results + [r for r in semantic_results if r not in filter_results]
-        return combined_results[:top_k]
-    return filter_results[:top_k]
+    
+    # Extract IDs and references from base chunks
+    referenced_ids = set()
+    for chunk in base_chunks:
+        chunk_data = json.loads(chunk)
+        for key, value in chunk_data.get('context', {}).items():
+            if '_id' in key.lower() and isinstance(value, str):
+                referenced_ids.add(value)
+    
+    # Define common comparison patterns
+    comparison_patterns = {
+        'lead_times': {
+            'query': """
+                SELECT 
+                    c.id,
+                    c.chunk_json ->> 'supplier_id' AS supplier_id,
+                    (c.chunk_json -> 'lead_times' ->> 'actual')::float AS actual_lead_time,
+                    (c.chunk_json -> 'lead_times' ->> 'contracted')::float AS contracted_lead_time,
+                    c.chunk_json as full_data
+                FROM json_chunks c
+                WHERE c.chunk_json ->> 'type' = 'supplier_data'
+                AND c.chunk_json ->> 'supplier_id' = ANY(%s)
+            """,
+            'analysis': lambda rows: [
+                {
+                    'supplier_id': row[1],
+                    'discrepancy': row[2] - row[3],
+                    'percent_difference': ((row[2] - row[3]) / row[3] * 100),
+                    'actual': row[2],
+                    'contracted': row[3],
+                    'full_data': row[4]
+                }
+                for row in rows
+            ]
+        },
+        'price_comparison': {
+            'query': """
+                SELECT 
+                    c.id,
+                    c.chunk_json ->> 'product_id' AS product_id,
+                    (c.chunk_json -> 'pricing' ->> 'list_price')::float AS list_price,
+                    (c.chunk_json -> 'pricing' ->> 'actual_price')::float AS actual_price,
+                    c.chunk_json as full_data
+                FROM json_chunks c
+                WHERE c.chunk_json ->> 'type' = 'product_pricing'
+                AND c.chunk_json ->> 'product_id' = ANY(%s)
+            """,
+            'analysis': lambda rows: [
+                {
+                    'product_id': row[1],
+                    'discount': row[2] - row[3],
+                    'discount_percentage': ((row[2] - row[3]) / row[2] * 100),
+                    'list_price': row[2],
+                    'actual_price': row[3],
+                    'full_data': row[4]
+                }
+                for row in rows
+            ]
+        }
+    }
+    
+    # Detect comparison type from query
+    comparison_type = None
+    if 'lead time' in query.lower() or 'delivery' in query.lower():
+        comparison_type = 'lead_times'
+    elif 'price' in query.lower() or 'cost' in query.lower():
+        comparison_type = 'price_comparison'
+    
+    if comparison_type and referenced_ids:
+        pattern = comparison_patterns[comparison_type]
+        cur.execute(pattern['query'], (list(referenced_ids),))
+        rows = cur.fetchall()
+        
+        if rows:
+            analysis_results = pattern['analysis'](rows)
+            print(f"\nDEBUG: Cross-reference analysis ({comparison_type}):")
+            for result in analysis_results:
+                print(f"  - {result}")
+            
+            # Enrich original chunks with analysis
+            for chunk in base_chunks:
+                chunk_data = json.loads(chunk)
+                chunk_data['analysis'] = {
+                    'type': comparison_type,
+                    'results': analysis_results
+                }
+                chunk = json.dumps(chunk_data)
+    
+    cur.close()
+    return base_chunks
+
+def post_process_chunks(chunks: List[Dict], query_intent: Dict) -> List[Dict]:
+    """Post-process retrieved chunks based on query intent."""
+    
+    def analyze_risk_metrics(chunk_list):
+        """Analyze risk indicators and metrics across chunks."""
+        risk_indicators = []
+        
+        for chunk in chunk_list:
+            content = chunk.get('content', {})
+            if not isinstance(content, dict):
+                continue
+                
+            # Look for any alerts or warnings in the data
+            alerts = []
+            def extract_alerts(obj, path=[]):
+                if isinstance(obj, dict):
+                    if 'type' in obj and any(risk_word in str(obj.get('type', '')).lower() 
+                                           for risk_word in ['alert', 'warning', 'risk']):
+                        alerts.append({
+                            'path': path,
+                            'data': obj
+                        })
+                    for k, v in obj.items():
+                        if isinstance(v, (dict, list)):
+                            extract_alerts(v, path + [k])
+                elif isinstance(obj, list):
+                    for i, item in enumerate(v):
+                        if isinstance(item, (dict, list)):
+                            extract_alerts(item, path + [str(i)])
+            
+            extract_alerts(content)
+            
+            if alerts:
+                risk_indicators.append({
+                    'alerts': alerts,
+                    'content': content
+                })
+        
+        return [{'type': 'risk_analysis', 'content': risk_indicators}]
+    
+    # Apply processing based on intent
+    primary_intent = query_intent['primary_intent']
+    all_intents = query_intent.get('all_intents', [])
+    
+    if primary_intent == 'aggregation' or 'aggregation' in all_intents:
+        return aggregate_metrics(chunks)
+    elif primary_intent == 'temporal' or 'temporal' in all_intents:
+        return process_temporal(chunks)
+    elif primary_intent == 'entity' or 'relationship' in all_intents:
+        return process_relationships(chunks)
+    elif 'risk_analysis' in all_intents:
+        return analyze_risk_metrics(chunks)
+    
+    # Default to original chunks if no specific processing needed
+    return chunks
+
+def format_response(chunks: List[Dict], query_archetype: str) -> Dict:
+    """Format response based on archetype patterns."""
+    if not query_archetype:
+        return {'results': chunks}
+        
+    if query_archetype == 'metric_data':
+        return {
+            'metrics': chunks,
+            'summary': f"Found {len(chunks)} metric data points"
+        }
+    elif query_archetype == 'event_log':
+        return {
+            'timeline': sorted(chunks, key=lambda x: x.get('metadata', {}).get('timestamp', '')),
+            'summary': f"Found {len(chunks)} events"
+        }
+    elif query_archetype == 'entity_definition':
+        return {
+            'entity': chunks[0] if chunks else None,
+            'related': chunks[1:],
+            'summary': f"Found primary entity with {len(chunks)-1} related items"
+        }
+    
+    return {'results': chunks}
 

@@ -217,109 +217,107 @@ def extract_entity_references(query):
     return references if references else None
 
 def analyze_query_intent(query):
-    """
-    Analyze query to determine primary and secondary intents.
-    
-    Args:
-        query (str): User query string
-        
-    Returns:
-        dict: Intent analysis containing:
-            - primary_intent: Main query intent
-            - all_intents: List of all detected intents
-            
-    Intent Types:
-        - temporal: Time-based queries
-        - aggregation: Metric aggregations
-        - entity: Entity relationships
-        - state: State transitions
-        - general: Default fallback
-        
-    Process:
-        1. Checks for temporal patterns
-        2. Identifies metric/aggregation patterns
-        3. Detects entity relationships
-        4. Looks for state transitions
-        5. Determines primary intent based on priority
-    """
+    """Analyze query to determine primary and secondary intents."""
     query_lower = query.lower()
     intents = set()
     
-    # Enhanced temporal patterns
-    temporal_patterns = [
-        r'during', r'progression', r'trend',
-        r'when', r'time', r'date', 
-        r'recent', r'latest', r'today', 
-        r'yesterday', r'week', r'month',
-        r'history', r'period', r'interval'
-    ]
+    patterns = {
+        'relationship': [
+            # Direct relationships
+            r'influence', r'impact', r'affect',
+            r'relationship', r'connection', r'linked',
+            r'between', r'among', r'across',
+            # Indirect relationships
+            r'through', r'via', r'chain',
+            r'path', r'flow', r'network',
+            # Comparative relationships
+            r'compare', r'versus', r'vs',
+            r'relative to', r'compared to',
+            r'discrepanc(y|ies)', r'difference',
+            r'actual vs', r'against',
+            # Connected entities
+            r'considering', r'based on', r'related to',
+            r'involving', r'including', r'with'
+        ],
+        'temporal': [
+            # Time points
+            r'when', r'time', r'date',
+            r'current', r'latest', r'recent',
+            # Time ranges
+            r'during', r'period', r'interval',
+            r'between.*and', r'from.*to',
+            # Relative time
+            r'next', r'last', r'previous',
+            r'upcoming', r'future', r'past'
+        ],
+        'metric': [
+            # Basic metrics
+            r'how many', r'amount', r'number',
+            r'value', r'level', r'quantity',
+            # Aggregations
+            r'average', r'mean', r'median',
+            r'total', r'sum', r'aggregate',
+            # Comparisons
+            r'more than', r'less than',
+            r'greater', r'higher', r'lower',
+            r'maximum', r'minimum', r'peak'
+        ],
+        'risk': [
+            # Risk indicators
+            r'risk', r'threat', r'danger',
+            r'warning', r'alert', r'critical',
+            # Analysis terms
+            r'analysis', r'assessment',
+            r'evaluation', r'measure',
+            # Discrepancies
+            r'gap', r'deviation', r'variance',
+            r'discrepancy', r'difference'
+        ],
+        'comparison': [
+            r'compare', r'vs', r'versus',
+            r'actual.*vs', r'contracted.*vs',
+            r'discrepanc(y|ies)', r'difference',
+            r'deviation', r'variance',
+            r'expected.*actual', 'planned.*actual'
+        ]
+    }
     
-    # Enhanced metric/aggregation patterns
-    metric_patterns = [
-        r'metric', r'measure', r'value',
-        r'how many', r'average', r'mean',
-        r'total', r'peak', r'maximum', 
-        r'minimum', r'count', r'sum',
-        r'usage', r'level', r'rate',
-        r'progression', r'trend', r'change'
-    ]
+    # Check patterns and add intents
+    for intent_type, pattern_list in patterns.items():
+        matches = [p for p in pattern_list if re.search(p, query_lower)]
+        if matches:
+            intents.add(intent_type)
+            print(f"DEBUG: {intent_type.title()} matches: {matches}")
     
-    # Enhanced entity relationship patterns
-    entity_patterns = [
-        r'related', r'connected', r'between',
-        r'relationship', r'dependency', r'link',
-        r'associated', r'correlation'
-    ]
-    
-    # Enhanced state transition patterns
-    state_patterns = [
-        r'state', r'status', r'changed',
-        r'transition', r'switch', r'moved',
-        r'became', r'turned'
-    ]
-    
-    print(f"\nDEBUG: Analyzing query: '{query}'")
-    
-    # Check temporal patterns
-    temporal_matches = [p for p in temporal_patterns if p in query_lower]
-    if temporal_matches:
-        intents.add('temporal')
-        print(f"DEBUG: Temporal matches: {temporal_matches}")
-    
-    # Check metric patterns
-    metric_matches = [p for p in metric_patterns if p in query_lower]
-    if metric_matches:
-        intents.add('aggregation')
-        print(f"DEBUG: Metric matches: {metric_matches}")
-    
-    # Check entity patterns
-    entity_matches = [p for p in entity_patterns if p in query_lower]
-    if entity_matches:
-        intents.add('entity')
-        print(f"DEBUG: Entity matches: {entity_matches}")
-    
-    # Check state patterns
-    state_matches = [p for p in state_patterns if p in query_lower]
-    if state_matches:
-        intents.add('state')
-        print(f"DEBUG: State matches: {state_matches}")
-    
-    # Determine primary intent with enhanced priority logic
+    # Add 'general' intent if no others found
     if not intents:
-        primary = 'general'
         intents.add('general')
         print("DEBUG: No specific intent detected, using 'general'")
-    else:
-        # Priority order considers combined intents
-        if 'temporal' in intents and 'aggregation' in intents:
-            # For queries about metric changes over time
-            primary = 'temporal' if 'progression' in query_lower else 'aggregation'
-        else:
-            # Standard priority order
-            for intent_type in ['temporal', 'aggregation', 'entity', 'state', 'general']:
-                if intent_type in intents:
-                    primary = intent_type
-                    break
+    
+    # Determine primary intent based on combinations
+    primary = 'general'
+    if intents - {'general'}:
+        if 'comparison' in intents:
+            primary = 'relationship'
+        elif 'risk' in intents:
+            # Risk queries usually need relationship traversal
+            primary = 'relationship'
+            if 'temporal' in intents:
+                # Add temporal for future predictions
+                intents.add('temporal')
+        elif 'relationship' in intents:
+            primary = 'relationship'
+        elif 'temporal' in intents and 'metric' in intents:
+            primary = 'temporal'
+        elif 'metric' in intents:
+            primary = 'metric'
+        elif 'temporal' in intents:
+            primary = 'temporal'
+    
+    # Force relationship intent when multiple factors need consideration
+    if 'considering' in query_lower or 'based on' in query_lower:
+        primary = 'relationship'
+        intents.add('relationship')
     
     result = {
         'primary_intent': primary,
@@ -368,15 +366,23 @@ def get_system_prompt(query_intent):
         - state: Focus on transitions
         - general: Default helpful assistant
     """
-    base_prompt = "You are a helpful assistant that answers questions based on the provided context."
+    base_prompt = """You are a precise data analyst assistant that answers questions based ONLY on the provided context.
     
+    CRITICAL RULES:
+    1. NEVER make up or hallucinate information
+    2. If you don't have enough information to answer, say "I don't have enough information to answer that question"
+    3. Only reference data that is explicitly present in the provided chunks
+    4. Do not infer relationships or connections unless they are directly evidenced in the data
+    5. If asked about specific metrics, only cite exact numbers from the data"""
+
+    # Add intent-specific guidance
     if query_intent['primary_intent'] == 'temporal':
-        return base_prompt + " Focus on temporal relationships and event sequences."
-    elif query_intent['primary_intent'] == 'aggregation':
-        return base_prompt + " Focus on numerical patterns and trends."
-    elif query_intent['primary_intent'] == 'entity':
-        return base_prompt + " Focus on entity relationships and attributes."
-    elif query_intent['primary_intent'] == 'state':
-        return base_prompt + " Focus on state transitions and system conditions."
-        
+        return base_prompt + " Focus on temporal relationships and event sequences that are explicitly documented in the data."
+    elif query_intent['primary_intent'] == 'relationship':
+        return base_prompt + " Focus on relationships and connections that are directly evidenced in the data structure."
+    elif query_intent['primary_intent'] == 'metric':
+        return base_prompt + " Focus on numerical patterns and trends that are explicitly present in the data."
+    elif query_intent['primary_intent'] == 'risk':
+        return base_prompt + " Focus on risk indicators and warning signs that are directly present in the data."
+    
     return base_prompt

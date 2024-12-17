@@ -1,168 +1,146 @@
+from typing import List, Dict, Optional, Tuple
+import json
+from app.parsing import extract_key_value_pairs, json_to_path_chunks
+from app.embedding import get_embedding
+from app.archetype import ArchetypeDetector
+from app.relationships import detect_relationships
+from app.database import (
+    get_files_to_process,
+    upsert_file_metadata,
+    save_chunk_archetypes
+)
+from app.utils import get_json_files, compute_file_hash
+from pydantic import ValidationError
 from app.retrieval import answer_query
-from app.database import get_files_to_process, upsert_file_metadata
-from app.utils import compute_file_hash, get_json_files
+from app.database import upsert_file_metadata, save_chunk_archetypes
+from app.utils import get_json_files
 from app.models import FlexibleModel
-from app.parsing import extract_entities, json_to_path_chunks, extract_key_value_pairs
-from app.config import MAX_CHUNKS
+from app.config import MAX_CHUNKS, embedding_model
+from app.archetype import ArchetypeDetector
+from app.relationships import detect_relationships
+from typing import List, Dict
+import json
 
 def load_and_embed_new_data(conn):
-    """
-    Processes new or modified JSON files, extracts entities and relationships,
-    generates embeddings, and stores them in the database.
+    """Load and embed new or modified JSON files."""
+    print("\nChecking for new data to embed...")
     
-    Args:
-        conn: PostgreSQL database connection
+    # Get list of files that need processing
+    documents = get_files_to_process(conn, compute_file_hash, get_json_files)
+    
+    if not documents:
+        print("No new or modified files to process.")
+        return True
         
-    Returns:
-        bool: True if processing was successful, None if no files to process
-        
-    Flow:
-        1. Identifies new/modified JSON files
-        2. Validates and extracts entities
-        3. Generates chunks with context
-        4. Creates embeddings
-        5. Stores in database with key-value pairs
-    """
-    from app.retrieval import get_relevant_chunks
-    from app.database import get_files_to_process
-    to_process = get_files_to_process(conn, compute_file_hash, get_json_files)
-    if not to_process:
-        print("No new or changed files to process.")
-        return
-    print(f"Processing {len(to_process)} new or modified files...")
-
-    documents = []
-    entities_by_file = {}
-
-    import json
-    from datetime import datetime
-    for f, f_hash, f_mtime in to_process:
-        try:
-            with open(f, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-                validated = FlexibleModel.parse_obj(data)
-                documents.append((f, f_hash, f_mtime, validated.__root__))
-                entities = extract_entities(validated.__root__)
-                entities_by_file[f] = entities
-                if entities:
-                    print(f"\nEntities and relationships in {f}:")
-                    for entity_id, info in entities.items():
-                        print(f"\nEntity: {entity_id}")
-                        print(f"Type: {info['type']}")
-                        print(f"Path: {info['path']}")
-                        if info.get('role'):
-                            print(f"Role: {info['role']}")
-                        if info.get('group_type'):
-                            print(f"Group: {info['group_type']}")
-                            if info.get('group_context'):
-                                print(f"Group Context: {info['group_context']}")
-                        if info.get('context'):
-                            print("Context:")
-                            for k, v in info['context'].items():
-                                print(f"  {k}: {v}")
-                print(f"Validated document: {f}")
-        except (ValidationError, json.JSONDecodeError) as e:
-            print(f"Skipping invalid JSON document {f}:", e)
-
-    print(f"Successfully validated {len(documents)} documents")
-
-    for f, entities in entities_by_file.items():
-        if entities:
-            print(f"\nEntities found in {f}:")
-            for entity_id, info in entities.items():
-                print(f"  - {info['type']}={entity_id} at {info['path']}")
-                if info.get('context'):
-                    context_summary = {k: str(v) for k, v in info['context'].items() if k != info['type']}
-                    print(f"    Context: {json.dumps(context_summary, indent=2)}")
-
+    print(f"Found {len(documents)} files to process")
+    
+    # Process each file
     all_chunks = []
-    from app.parsing import json_to_path_chunks, extract_key_value_pairs
-    from app.database import upsert_file_metadata
-    from app.config import embedding_model
-    from app.embedding import vector_search_with_filter
-
-    seen_keys = set()
-    for (f, f_hash, f_mtime, doc) in documents:
-        doc_chunks = json_to_path_chunks(doc, entities=entities_by_file.get(f))
+    detector = ArchetypeDetector()
+    
+    for f, f_hash, f_mtime in documents:
+        print(f"\nProcessing {f}")
+        
+        try:
+            with open(f, 'r') as file:
+                data = json.load(file)
+        except Exception as e:
+            print(f"Error loading file {f}: {e}")
+            continue
+        
+        # Generate chunks with metadata
+        doc_chunks = json_to_path_chunks(data, f)
         all_chunks.extend((f, chunk) for chunk in doc_chunks)
-
+    
     if not all_chunks:
         print("No chunks to embed from new files.")
-        for f, f_hash, f_mtime, d in documents:
-            upsert_file_metadata(conn, f, f_hash, f_mtime)
-        return
+        return True
 
     print(f"Generated {len(all_chunks)} chunks")
     print("Generating embeddings...")
 
-    chunk_texts = [c[1] for c in all_chunks]
+    # Generate embeddings in batches
+    chunk_texts = [json.dumps(c[1]) for c in all_chunks]  # Serialize chunk data
     chunk_embeddings = embedding_model.encode(chunk_texts, show_progress_bar=True)
-    print("Embeddings generated.")
-
+    
+    # Store chunks and embeddings
     cur = conn.cursor()
     for i, (f, chunk) in enumerate(all_chunks):
+        chunk_id = f"{f}:{i}"
         embedding_list = chunk_embeddings[i].tolist()
         embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
-        chunk_id = f"{f}:{i}"
         
-        # Serialize chunk to both text and JSON
-        chunk_text = json.dumps(chunk)
+        # Detect archetypes and relationships
+        chunk_archetypes = detector.detect_archetypes(chunk)
+        print(f"\nDEBUG: Chunk type before relationships: {type(chunk)}")
+        print(f"DEBUG: Chunk content: {chunk}")
+
+        # Get archetype for embedding
+        archetype = None
+        if chunk_archetypes:
+            archetype = {
+                'type': chunk_archetypes[0][0],  # First archetype type
+                'confidence': chunk_archetypes[0][1]  # First archetype confidence
+            }
+
+        # Generate embedding with archetype context
+        embedding_list = get_embedding(json.dumps(chunk), archetype).tolist()
+        embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
+
+        relationships = detect_relationships([chunk], conn)
         
+        chunk_metadata = {
+            'archetypes': [
+                {'type': a[0], 'confidence': a[1]} 
+                for a in chunk_archetypes
+            ] if chunk_archetypes else [],
+            'source_file': f,
+            'chunk_index': i,
+            'relationships': relationships.get('direct', {})
+        }
+        
+        # Store the chunk with its embedding
         cur.execute("""
             INSERT INTO json_chunks (id, chunk_text, chunk_json, embedding, metadata)
-            VALUES (%s, %s, %s::jsonb, %s, '{}'::jsonb)
-            ON CONFLICT (id) DO NOTHING;
-        """, (chunk_id, chunk_text, chunk_text, embedding_str))
+            VALUES (%s, %s, %s::jsonb, %s::vector, %s::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+                chunk_text = EXCLUDED.chunk_text,
+                chunk_json = EXCLUDED.chunk_json,
+                embedding = EXCLUDED.embedding,
+                metadata = EXCLUDED.metadata
+        """, (
+            chunk_id,
+            json.dumps(chunk),  # Store full chunk as text
+            json.dumps(chunk),  # Store as JSONB for querying
+            embedding_str,
+            json.dumps(chunk_metadata)
+        ))
         
-        try:
-            # Extract key-value pairs from the chunk dictionary directly
-            pairs = {}
-            
-            # Add path information
-            path = chunk.get('path', '')
-            pairs['path'] = path
-            path_parts = path.split('.')
-            if len(path_parts) > 1:
-                pairs['path_root'] = path_parts[0]
-                pairs['path_leaf'] = path_parts[-1]
-            
-            # Add value information
-            value_data = chunk.get('value', {})
-            if isinstance(value_data, dict):
-                pairs['value_type'] = value_data.get('type', 'unknown')
-                if value_data.get('type') == 'primitive':
-                    val = value_data.get('value')
-                    if isinstance(val, (int, float, str)):
-                        pairs['value'] = str(val)
-                        pairs['python_type'] = value_data.get('python_type', '')
-            
-            # Add context information
-            for key, value in chunk.get('context', {}).items():
-                if isinstance(value, (str, int, float, bool)):
-                    pairs[f"context_{key}"] = str(value)
-            
-            # Add display names
-            for key, value in chunk.get('display_names', {}).items():
-                pairs[f"display_{key}"] = str(value)
-            
-            # Add entity information
-            for entity_id, entity_data in chunk.get('entities', {}).items():
-                pairs[f"entity_{entity_id}"] = entity_data.get('type', 'unknown')
-                if 'name' in entity_data:
-                    pairs[f"entity_{entity_id}_name"] = str(entity_data['name'])
-            
-            # Insert key-value pairs
-            for k, v in pairs.items():
-                cur.execute("""
-                    INSERT INTO chunk_key_values (chunk_id, key, value)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (chunk_id, key) DO UPDATE SET value = EXCLUDED.value;
-                """, (chunk_id, k, str(v)))
-                
-        except Exception as e:
-            print(f"Error processing chunk {chunk_id}: {e}")
-            continue
-
+        # Store relationships in dedicated table
+        if relationships.get('direct'):
+            for rel_type, rels in relationships['direct'].items():
+                for rel in rels:
+                    # Create synthetic chunk IDs for entity references
+                    source_id = f"{f}:{chunk_id}"
+                    target_id = f"entity:{rel['target']}"
+                    
+                    cur.execute("""
+                        INSERT INTO chunk_relationships 
+                        (source_chunk_id, target_chunk_id, relationship_type, metadata)
+                        VALUES (%s, %s, %s, %s::jsonb)
+                        ON CONFLICT (source_chunk_id, target_chunk_id, relationship_type) 
+                        DO UPDATE SET metadata = EXCLUDED.metadata
+                    """, (
+                        source_id,
+                        target_id, 
+                        rel['type'],
+                        json.dumps(rel['context'])
+                    ))
+    
+    # Update file metadata
+    for f, f_hash, f_mtime in documents:
+        upsert_file_metadata(conn, f, f_hash, f_mtime)
+    
     conn.commit()
     cur.close()
     
@@ -205,3 +183,33 @@ def chat_loop(conn):
             print("Assistant:", answer)
         except Exception as e:
             print("Error processing query:", str(e))
+
+def build_prompt(query: str, context: List[str], query_intent: Dict) -> str:
+    """Build prompt with enhanced context formatting."""
+    prompt = "Use the provided context to answer the user's query.\n\n"
+    
+    # Add intent-specific guidelines
+    prompt += f"Context type: {query_intent['primary_intent']}\n"
+    prompt += f"Additional intents: {', '.join(query_intent['all_intents'])}\n\n"
+    
+    # Add analysis guidelines
+    prompt += "Guidelines:\n"
+    prompt += "- Focus on aggregation aspects\n"
+    prompt += "- Use specific details from the context\n"
+    prompt += "- Always use human-readable names in addition to IDs when available\n"
+    prompt += "- Show relationships between named entities\n"
+    prompt += "- If information isn't in the context, say so\n"
+    prompt += "- For temporal queries, preserve chronological order\n"
+    prompt += "- For metrics, include specific values and trends\n\n"
+    
+    # Format context entries
+    prompt += "Context:\n"
+    if context:
+        prompt += "\n".join(f"- {entry}" for entry in context)
+    prompt += "\n\n"
+    
+    # Add query
+    prompt += f"Question: {query}\n\n"
+    prompt += "Answer based only on the provided context, using human-readable names."
+    
+    return prompt

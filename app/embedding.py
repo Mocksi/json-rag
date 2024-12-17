@@ -1,5 +1,46 @@
-from app.config import embedding_model
-import psycopg2
+from typing import List, Dict, Optional
+import numpy as np
+from sentence_transformers import SentenceTransformer
+import json
+
+# Initialize the embedding model
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+def get_embedding(text: str, archetype: Optional[Dict] = None) -> np.ndarray:
+    """Get embedding vector for text, with archetype-specific preprocessing."""
+    if not archetype:
+        return model.encode(text)
+        
+    # Preprocess based on archetype
+    processed_text = text
+    if isinstance(text, (dict, list)):
+        text = json.dumps(text)
+        
+    try:
+        if archetype['type'] == 'entity_definition':
+            data = json.loads(text) if isinstance(text, str) else text
+            key_fields = ['id', 'name', 'type', 'code']
+            identifiers = " ".join(f"{k}:{data.get(k)}" for k in key_fields if k in data)
+            processed_text = f"{identifiers} {text}"
+            
+        elif archetype['type'] == 'event':
+            data = json.loads(text) if isinstance(text, str) else text
+            time_fields = ['timestamp', 'date', 'created_at']
+            state_fields = ['status', 'state', 'type']
+            temporal = " ".join(f"{k}:{data.get(k)}" for k in time_fields if k in data)
+            states = " ".join(f"{k}:{data.get(k)}" for k in state_fields if k in data)
+            processed_text = f"{temporal} {states} {text}"
+            
+        elif archetype['type'] == 'metric':
+            data = json.loads(text) if isinstance(text, str) else text
+            numeric_fields = {k: v for k, v in data.items() if isinstance(v, (int, float))}
+            metrics = " ".join(f"{k}:{v}" for k, v in numeric_fields.items())
+            processed_text = f"{metrics} {text}"
+    except Exception as e:
+        print(f"WARNING: Failed to preprocess text for embedding: {e}")
+        processed_text = text
+        
+    return model.encode(processed_text)
 
 def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
     """
@@ -63,39 +104,20 @@ def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
     cur.close()
     return retrieved_texts
 
-def get_embedding(text):
+def compute_similarity(embedding1, embedding2):
     """
-    Generate embedding vector for input text.
+    Compute cosine similarity between two embeddings.
     
     Args:
-        text (str): Text to embed
+        embedding1 (list): First embedding vector
+        embedding2 (list): Second embedding vector
         
     Returns:
-        list: Embedding vector of fixed dimension
-        
-    Note:
-        Handles invalid input by returning zero vector
-        Includes debug output for embedding generation
-        Uses sentence-transformers model from config
-        
-    Example:
-        >>> text = "What suppliers are in the East region?"
-        >>> embedding = get_embedding(text)
-        DEBUG: Generated embedding of size 384 for text: What suppliers...
+        float: Similarity score between 0 and 1
     """
-    try:
-        # Ensure text is string and handle empty input
-        if not text or not isinstance(text, str):
-            print(f"WARNING: Invalid text for embedding: {text}")
-            text = str(text) if text else ""
-            
-        # Generate embedding
-        embedding = embedding_model.encode([text])[0]
-        
-        print(f"DEBUG: Generated embedding of size {len(embedding)} for text: {text[:100]}...")
-        return embedding.tolist()  # Convert numpy array to list
-        
-    except Exception as e:
-        print(f"ERROR: Failed to generate embedding: {e}")
-        # Return zero vector of correct dimension as fallback
-        return [0.0] * embedding_model.get_sentence_embedding_dimension()
+    # Convert to numpy arrays
+    v1 = np.array(embedding1)
+    v2 = np.array(embedding2)
+    
+    # Compute cosine similarity
+    return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
