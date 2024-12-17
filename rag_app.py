@@ -14,6 +14,8 @@ from collections import defaultdict
 import statistics
 import itertools
 import re
+from dateutil.parser import parse
+import math
 
 # Load environment variables from .env file
 load_dotenv()
@@ -127,73 +129,205 @@ def get_files_to_process(conn):
 
 def create_enhanced_chunk(path, value, context=None, entities=None):
     """
-    Create an enhanced text chunk with path, type, value, and related context.
+    Create a structured JSON chunk with reliable serialization.
     
     Args:
-        path (str): JSON path to the current value
-        value: The value at the current path
+        path (str): JSON path to the value
+        value: The value at the path
         context (dict, optional): Parent context information
-        entities (dict, optional): Known entities and their relationships
+        entities (dict, optional): Related entity information
         
     Returns:
-        str: Formatted string containing the chunk with context
+        str: JSON string containing structured chunk data
     """
-    val_type = type(value).__name__
+    chunk_data = {
+        'path': path,
+        'value': serialize_value(value),
+        'context': serialize_context(context) if context else {},
+        'entities': serialize_entities(entities) if entities else {},
+        'metadata': {
+            'created_at': datetime.now().isoformat(),
+            'chunk_version': '2.0',
+            'path_depth': len(path.split('.')),
+            'path_type': classify_path(path)
+        }
+    }
     
-    # Handle different value types appropriately
+    # Add type-specific metadata
+    enrich_chunk_metadata(chunk_data, value)
+    
+    try:
+        return json.dumps(chunk_data, default=str)
+    except TypeError as e:
+        print(f"Error serializing chunk data: {e}")
+        # Fallback with basic serialization
+        return json.dumps({
+            'path': path,
+            'error': 'Serialization failed',
+            'metadata': chunk_data['metadata']
+        })
+
+def serialize_value(value):
+    """
+    Safely serialize any value into a structured format.
+    
+    Args:
+        value: Value to serialize
+        
+    Returns:
+        dict: Structured representation of the value
+    """
+    if value is None:
+        return {'type': 'null', 'value': None}
+        
+    if isinstance(value, (str, int, float, bool)):
+        return {
+            'type': 'primitive',
+            'value': value,
+            'python_type': type(value).__name__
+        }
+        
     if isinstance(value, dict):
-        val_str = json.dumps({k: str(v) if not isinstance(v, (dict, list)) else "..." 
-                            for k, v in value.items()}, indent=2)
-    elif isinstance(value, list):
-        val_str = f"Array with {len(value)} items"
-    else:
-        val_str = str(value)
+        return {
+            'type': 'complex',
+            'structure': 'dict',
+            'size': len(value),
+            'keys': list(value.keys()),
+            'sample': {k: serialize_value(v) for k, v in list(value.items())[:3]},
+            'summary': {
+                'total_keys': len(value),
+                'value_types': list(set(type(v).__name__ for v in value.values()))
+            }
+        }
+        
+    if isinstance(value, list):
+        return {
+            'type': 'complex',
+            'structure': 'list',
+            'size': len(value),
+            'sample': [serialize_value(v) for v in value[:3]],
+            'summary': {
+                'total_items': len(value),
+                'value_types': list(set(type(v).__name__ for v in value))
+            }
+        }
+        
+    # Handle other types (datetime, custom objects, etc.)
+    return {
+        'type': 'other',
+        'python_type': type(value).__name__,
+        'string_repr': str(value)
+    }
+
+def serialize_context(context):
+    """
+    Safely serialize context information.
     
-    # Build context information
-    context_info = []
-    if context:
-        context_str = {k: str(v) if not isinstance(v, (dict, list)) else "..."
-                      for k, v in context.items()}
-        context_info.append(f"Context: {json.dumps(context_str, indent=2)}")
+    Args:
+        context: Context dictionary
+        
+    Returns:
+        dict: Serialized context
+    """
+    if not isinstance(context, dict):
+        return {'error': 'Invalid context type'}
+        
+    serialized = {}
+    for key, value in context.items():
+        try:
+            if isinstance(value, (str, int, float, bool, type(None))):
+                serialized[key] = value
+            else:
+                serialized[key] = str(value)
+        except Exception as e:
+            serialized[key] = f"<Error serializing: {str(e)}>"
     
-    # Add related entities if they exist
-    related_entities = []
-    if entities:
-        for entity_id, info in entities.items():
-            entity_path = info['path']
-            if path.startswith(entity_path) or entity_path.startswith(path):
-                related_entities.append(f"Related Entity: {info['type']}={entity_id}")
-                # Add entity context if available
-                if info.get('context'):
-                    entity_context = {k: str(v) for k, v in info['context'].items() 
-                                   if k != info['type']}
-                    related_entities.append(f"Entity Context: {json.dumps(entity_context, indent=2)}")
+    return serialized
+
+def serialize_entities(entities):
+    """
+    Safely serialize entity information.
     
-    # Break path into hierarchical contexts
-    path_contexts = []
-    path_parts = path.split('.')
-    current_context = "$"
-    for part in path_parts[1:]:  # Skip the root $
-        current_context = f"{current_context}.{part}"
-        if context and current_context in context:
-            path_contexts.append(f"Parent Path: {current_context}")
-            path_contexts.append(f"Parent Context: {json.dumps(context[current_context], indent=2)}")
+    Args:
+        entities: Entity dictionary
+        
+    Returns:
+        dict: Serialized entities
+    """
+    if not isinstance(entities, dict):
+        return {'error': 'Invalid entities type'}
+        
+    serialized = {}
+    for entity_id, entity_data in entities.items():
+        try:
+            serialized[str(entity_id)] = {
+                'type': entity_data.get('type', 'unknown'),
+                'attributes': serialize_context(entity_data.get('attributes', {})),
+                'relationships': serialize_context(entity_data.get('relationships', {}))
+            }
+        except Exception as e:
+            serialized[str(entity_id)] = {'error': f"Serialization failed: {str(e)}"}
     
-    # Combine all components
-    chunk_parts = [
-        f"Path: {path}",
-        f"Type: {val_type}",
-        f"Value: {val_str}"
-    ]
+    return serialized
+
+def enrich_chunk_metadata(chunk_data, value):
+    """
+    Add type-specific metadata to chunk data.
     
-    if path_contexts:
-        chunk_parts.extend(path_contexts)
-    if context_info:
-        chunk_parts.extend(context_info)
-    if related_entities:
-        chunk_parts.extend(related_entities)
+    Args:
+        chunk_data (dict): Chunk data to enrich
+        value: Original value
+    """
+    # Numeric metadata
+    if isinstance(value, (int, float)):
+        chunk_data['numeric_metadata'] = {
+            'value_exact': value,
+            'value_range': {
+                'min': value - abs(value * 0.1),  # 10% range
+                'max': value + abs(value * 0.1)
+            },
+            'magnitude': math.floor(math.log10(abs(value))) if value != 0 else 0
+        }
     
-    return "\n".join(chunk_parts)
+    # Temporal metadata
+    if isinstance(value, str):
+        try:
+            parsed_date = parse_timestamp(value)
+            chunk_data['temporal_metadata'] = {
+                'timestamp': parsed_date.isoformat(),
+                'year': parsed_date.year,
+                'month': parsed_date.month,
+                'day': parsed_date.day,
+                'weekday': parsed_date.weekday()
+            }
+        except:
+            pass
+    
+    # String metadata
+    if isinstance(value, str):
+        chunk_data['string_metadata'] = {
+            'length': len(value),
+            'contains_numbers': bool(re.search(r'\d', value)),
+            'contains_urls': bool(re.search(r'https?://\S+', value))
+        }
+
+def classify_path(path):
+    """
+    Classify the type of path based on its structure.
+    
+    Args:
+        path (str): JSON path
+        
+    Returns:
+        str: Path classification
+    """
+    if path == 'root':
+        return 'root'
+    if '[' in path:
+        return 'array_access'
+    if '.' in path:
+        return 'nested_object'
+    return 'direct_access'
 
 def json_to_path_chunks(json_obj, current_path="$", entities=None, parent_context=None, path_contexts=None):
     """
@@ -215,8 +349,10 @@ def json_to_path_chunks(json_obj, current_path="$", entities=None, parent_contex
     
     if isinstance(json_obj, dict):
         # Store context for this path
-        path_contexts[current_path] = {k: str(v) if not isinstance(v, (dict, list)) else "..."
-                                     for k, v in json_obj.items()}
+        path_contexts[current_path] = {
+            key: str(value) if not isinstance(value, (dict, list)) else "..." 
+            for key, value in json_obj.items()
+        }  # Fixed dictionary comprehension
         
         # Create chunk for the entire object with its context
         chunks.append(create_enhanced_chunk(
@@ -378,56 +514,70 @@ def index_chunk_keys(conn, chunk_id, chunk_text):
     Args:
         conn: PostgreSQL database connection
         chunk_id (str): Unique identifier for the chunk
-        chunk_text (str): Text content of the chunk
+        chunk_text (str): JSON string containing chunk data
     """
-    # Extract key-value pairs from chunk_text if present
-    extracted_pairs = extract_key_value_pairs(chunk_text)
+    pairs = extract_key_value_pairs(chunk_text)
     cur = conn.cursor()
-    for k, v in extracted_pairs.items():
-        cur.execute("""
-            INSERT INTO chunk_keys_index (key_name, key_value, chunk_id)
-            VALUES (%s, %s, %s)
-        """, (k, v, chunk_id))
+    
+    try:
+        for key, value in pairs.items():
+            cur.execute("""
+                INSERT INTO chunk_key_values (chunk_id, key, value)
+                VALUES (%s, %s, %s)
+            """, (chunk_id, key, str(value)))
+        
+        conn.commit()
+        
+    except Exception as e:
+        print(f"Error indexing chunk keys: {e}")
+        conn.rollback()
 
-def hybrid_retrieval(conn, query, top_k=5):
+def hybrid_retrieval(conn, query, filters, top_k=20):
     """
-    Perform hybrid retrieval with enhanced numeric comparisons.
+    Perform hybrid retrieval using both filters and semantic search.
     
     Args:
         conn: PostgreSQL database connection
         query (str): User's query
-        top_k (int): Number of results to return
+        filters (dict): Extracted filters
+        top_k (int): Number of results to retrieve
         
     Returns:
-        list: Retrieved chunks filtered by keywords and numeric conditions
+        list: Retrieved chunks
     """
-    filters = extract_filters_from_query(query)
+    # First, get candidates using filters
+    filter_conditions = []
+    filter_values = []
     
-    filtered_chunk_ids = None
-    if filters:
-        cur = conn.cursor()
-        conditions = []
-        params = []
-        
-        for k, v in filters.items():
-            # Check for numeric comparisons
-            if '_gt_' in k or '_lt_' in k:
-                try:
-                    value = float(v)
-                    conditions.append(f"(key_name=%s AND key_value::float {'>=' if '_gt_' in k else '<='} %s)")
-                    params.extend([k.split('_')[0], value])
-                except ValueError:
-                    conditions.append("(key_name=%s AND key_value=%s)")
-                    params.extend([k, v])
-            else:
-                conditions.append("(key_name=%s AND key_value=%s)")
-                params.extend([k, v])
-                
-        sql = f"SELECT chunk_id FROM chunk_keys_index WHERE {' AND '.join(conditions)}"
-        cur.execute(sql, tuple(params))
-        filtered_chunk_ids = [r[0] for r in cur.fetchall()]
-
-    return vector_search_with_filter(conn, query, filtered_chunk_ids, top_k)
+    for key, value in filters.items():
+        filter_conditions.append(f"kv.key = %s AND kv.value = %s")
+        filter_values.extend([key, str(value)])
+    
+    filter_query = f"""
+    SELECT DISTINCT c.chunk_text
+    FROM json_chunks c
+    JOIN chunk_key_values kv ON c.id = kv.chunk_id
+    WHERE {' OR '.join(filter_conditions)}
+    """
+    
+    cur = conn.cursor()
+    cur.execute(filter_query, filter_values)
+    filter_results = [r[0] for r in cur.fetchall()]
+    
+    # If we have too few results, supplement with semantic search
+    if len(filter_results) < top_k:
+        semantic_results = get_relevant_chunks(
+            conn, 
+            query, 
+            top_k=top_k - len(filter_results)
+        )
+        combined_results = filter_results + [
+            r for r in semantic_results 
+            if r not in filter_results
+        ]
+        return combined_results[:top_k]
+    
+    return filter_results[:top_k]
 
 def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
     """
@@ -449,7 +599,7 @@ def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
     if allowed_chunk_ids and len(allowed_chunk_ids) > 0:
         format_ids = ",".join(["%s"] * len(allowed_chunk_ids))
         sql = f"""
-        SELECT chunk_text
+        SELECT chunk_text::text
         FROM json_chunks
         WHERE id IN ({format_ids})
         ORDER BY embedding <-> '{embedding_str}'
@@ -458,7 +608,7 @@ def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
         cur.execute(sql, tuple(allowed_chunk_ids))
     else:
         sql = f"""
-        SELECT chunk_text
+        SELECT chunk_text::text
         FROM json_chunks
         ORDER BY embedding <-> '{embedding_str}'
         LIMIT {top_k};
@@ -592,7 +742,7 @@ def get_relevant_chunks(conn, query, top_k=5):
     embedding_str = "[" + ",".join(str(x) for x in query_embedding_list) + "]"
 
     search_query = f"""
-    SELECT chunk_text
+    SELECT chunk_text::text
     FROM json_chunks
     ORDER BY embedding <-> '{embedding_str}'
     LIMIT {top_k};
@@ -603,33 +753,38 @@ def get_relevant_chunks(conn, query, top_k=5):
     cur.close()
     return retrieved_texts
 
-def build_prompt(user_query, retrieved_chunks):
+def build_prompt(query, retrieved_texts, query_intent):
     """
-    Build a prompt for the language model using retrieved context.
+    Build a context-aware prompt based on query intent.
     
     Args:
-        user_query (str): User's question
-        retrieved_chunks (list): Relevant context chunks
+        query (str): User's question
+        retrieved_texts (list): Retrieved context chunks
+        query_intent (dict): Analyzed query intent
         
     Returns:
-        str: Formatted prompt with context and query
+        str: Formatted prompt
     """
-    context_str = "\n\n".join(retrieved_chunks)
-    prompt = f"""You are a helpful assistant. Use the provided context to answer the user's query.
+    context_str = "\n\n".join(retrieved_texts)
+    
+    prompt = f"""Use the provided context to answer the user's query.
+
+Context type: {query_intent['primary_intent']}
+Additional intents: {', '.join(query_intent['all_intents'])}
 
 Guidelines:
-- Use specific names and identifiers from the context
-- Reference exact paths when relevant
-- If multiple similar items exist, distinguish them clearly
-- If the answer isn't in the context, say so
-- Maintain the relationships between entities as shown in the context
+- Focus on {query_intent['primary_intent']} aspects
+- Use specific details from the context
+- Maintain relationships between entities
+- If information isn't in the context, say so
 
 Context:
 {context_str}
 
-Question: {user_query}
+Question: {query}
 
-Only use the provided context to answer."""
+Answer based only on the provided context."""
+    
     return prompt
 
 def summarize_chunks(chunks):
@@ -689,89 +844,212 @@ def extract_timestamp(chunk_text):
 
 def hierarchical_retrieval(conn, query, top_k=20):
     """
-    Perform hierarchical retrieval with automatic summarization and timeline preservation.
+    Perform hierarchical retrieval with automatic summarization.
     
     Args:
-        conn: PostgreSQL database connection
-        query (str): User's query
-        top_k (int): Initial number of chunks to retrieve
+        conn: Database connection
+        query (str): Search query
+        top_k (int): Maximum results to return
         
     Returns:
-        list: Either original chunks or summarized versions if too many
+        list: Retrieved and potentially summarized chunks
     """
-    # Start by retrieving top_k chunks
+    # Get initial chunks
     initial_chunks = get_relevant_chunks(conn, query, top_k=top_k)
     
-    # Handle timeline queries
-    if "timeline" in query.lower() or any(word in query.lower() for word in ['when', 'date', 'time', 'chronological']):
-        # Sort chunks by timestamp if available
-        initial_chunks.sort(key=lambda x: extract_timestamp(x) if extract_timestamp(x) else datetime.max)
-        print("Retrieved chunks in chronological order")
-    
-    # If initial_chunks > MAX_CHUNKS, summarize in batches while preserving order
-    if len(initial_chunks) > MAX_CHUNKS:
-        batch_size = MAX_CHUNKS
-        summaries = []
-        
-        # Group chunks while maintaining chronological order
-        for i in range(0, len(initial_chunks), batch_size):
-            batch = initial_chunks[i:i+batch_size]
-            # Include temporal context in summary prompt
-            time_range = [extract_timestamp(c) for c in batch if extract_timestamp(c)]
-            if time_range:
-                context = f"Events from {min(time_range)} to {max(time_range)}:\n\n"
-            else:
-                context = ""
-            
-            summary = summarize_chunks([context + c for c in batch])
-            summaries.append(summary)
-            
-        # Now summarize the summaries if needed
-        while len(summaries) > MAX_CHUNKS:
-            new_summaries = []
-            for i in range(0, len(summaries), batch_size):
-                batch = summaries[i:i+batch_size]
-                summary = summarize_chunks(batch)
-                new_summaries.append(summary)
-            summaries = new_summaries
-            
-        return summaries
-    else:
+    if len(initial_chunks) <= MAX_CHUNKS:
         return initial_chunks
+    
+    # Group by parent
+    parent_map = group_by_parent(conn, initial_chunks)
+    summarized = []
+    
+    for parent_id, children in parent_map.items():
+        if len(children) > MAX_CHUNKS:
+            # Get parent context
+            parent_context = get_chunk_by_id(conn, parent_id)
+            
+            # Summarize children with parent context
+            summary = summarize_chunk_group(children, parent_context)
+            summarized.append(summary)
+        else:
+            summarized.extend(children)
+    
+    # If still too large, summarize again
+    if len(summarized) > MAX_CHUNKS:
+        return [summarize_chunks(summarized)]
+    
+    return summarized
 
-def answer_query_with_hierarchy(conn, query):
+def group_by_parent(conn, chunks):
     """
-    Answer query using hierarchical retrieval and summarization.
+    Group chunks by their parent chunks.
+    
+    Args:
+        conn: Database connection
+        chunks: List of chunks to group
+        
+    Returns:
+        dict: Mapping of parent_id to list of child chunks
+    """
+    cur = conn.cursor()
+    chunk_ids = [json.loads(c)['id'] for c in chunks]
+    
+    # Get parent relationships
+    format_str = ','.join(['%s'] * len(chunk_ids))
+    cur.execute(f"""
+        SELECT parent_chunk_id, child_chunk_id, c.chunk_text
+        FROM chunk_hierarchy h
+        JOIN json_chunks c ON c.id = h.child_chunk_id
+        WHERE child_chunk_id IN ({format_str})
+    """, tuple(chunk_ids))
+    
+    parent_map = defaultdict(list)
+    for parent_id, child_id, chunk_text in cur.fetchall():
+        parent_map[parent_id].append(chunk_text)
+    
+    return parent_map
+
+def summarize_chunk_group(chunks, parent_context):
+    """
+    Summarize a group of related chunks.
+    
+    Args:
+        chunks: List of chunks to summarize
+        parent_context: Context from parent chunk
+        
+    Returns:
+        str: Summarized content
+    """
+    try:
+        parent_data = json.loads(parent_context)
+        context_type = parent_data.get('context', {}).get('type', 'unknown')
+        
+        prompt = f"""Summarize these related chunks while preserving their structure.
+        
+Parent context: {json.dumps(parent_data.get('context', {}))}
+Content type: {context_type}
+
+Guidelines:
+1. Maintain relationships between elements
+2. Preserve key identifiers and references
+3. Keep critical metadata
+4. Highlight important patterns
+
+Content to summarize:
+{json.dumps(chunks, indent=2)}
+"""
+        
+        completion = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You create structured summaries of JSON content while preserving relationships and context."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.0
+        )
+        
+        return completion.choices[0].message.content
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        return summarize_chunks(chunks)  # Fall back to basic summarization
+
+def get_chunk_by_id(conn, chunk_id):
+    """
+    Retrieve a specific chunk by ID.
+    
+    Args:
+        conn: Database connection
+        chunk_id (str): ID of chunk to retrieve
+        
+    Returns:
+        str: Chunk text if found, None otherwise
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT chunk_text::text FROM json_chunks WHERE id = %s", (chunk_id,))
+    result = cur.fetchone()
+    return result[0] if result else None
+
+def answer_query(conn, query):
+    """
+    Answer a query using hybrid retrieval and hierarchical summarization.
     
     Args:
         conn: PostgreSQL database connection
         query (str): User's question
         
     Returns:
-        str: Generated answer based on retrieved and potentially summarized context
+        str: Generated answer based on retrieved context
     """
-    # Use hierarchical retrieval if needed
-    chunks_or_summaries = hierarchical_retrieval(conn, query)
+    # Extract filters and analyze query intent
+    filters = extract_filters_from_query(query)
+    query_intent = analyze_query_intent(query)
     
-    # If we end up with multiple summaries, just join them
-    if len(chunks_or_summaries) > MAX_CHUNKS:
-        # Summarize again
-        final_summary = summarize_chunks(chunks_or_summaries)
-        chunks = [final_summary]
+    # Choose retrieval strategy based on filters and intent
+    if filters:
+        retrieved_texts = hybrid_retrieval(conn, query, filters, top_k=MAX_CHUNKS)
+    elif query_intent['primary_intent'] == 'temporal':
+        retrieved_texts = temporal_retrieval(conn, query, top_k=MAX_CHUNKS)
+    elif query_intent['primary_intent'] == 'aggregation':
+        retrieved_texts = metric_retrieval(conn, query, top_k=MAX_CHUNKS)
     else:
-        chunks = chunks_or_summaries
+        retrieved_texts = get_relevant_chunks(conn, query, top_k=MAX_CHUNKS)
 
-    prompt = build_prompt(query, chunks)
+    # Handle large result sets
+    if len(retrieved_texts) > MAX_CHUNKS:
+        if query_intent['primary_intent'] == 'temporal':
+            # Use time-based summarization
+            retrieved_texts = summarize_by_timewindow(retrieved_texts)
+        elif 'aggregation' in query_intent['all_intents']:
+            # Use metric-based summarization
+            retrieved_texts = summarize_metrics(retrieved_texts)
+        else:
+            # Default to hierarchical retrieval
+            retrieved_texts = hierarchical_retrieval(conn, query, top_k=20)
+    
+    # Build context-aware prompt
+    prompt = build_prompt(query, retrieved_texts, query_intent)
+    
+    # Generate response
     completion = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided context."},
-            {"role": "user", "content": prompt}
+            {
+                "role": "system", 
+                "content": get_system_prompt(query_intent)
+            },
+            {
+                "role": "user", 
+                "content": prompt
+            }
         ],
         temperature=0.0,
         max_tokens=300
     )
+    
     return completion.choices[0].message.content.strip()
+
+def get_system_prompt(query_intent):
+    """
+    Get context-aware system prompt based on query intent.
+    
+    Args:
+        query_intent (dict): Analyzed query intent
+        
+    Returns:
+        str: Appropriate system prompt
+    """
+    base_prompt = "You are a helpful assistant that answers questions based on the provided context."
+    
+    if query_intent['primary_intent'] == 'temporal':
+        return base_prompt + " Focus on temporal relationships and event sequences."
+    elif query_intent['primary_intent'] == 'aggregation':
+        return base_prompt + " Focus on numerical patterns and trends."
+    elif query_intent['primary_intent'] == 'entity':
+        return base_prompt + " Focus on entity relationships and attributes."
+    
+    return base_prompt
 
 def chat_loop(conn):
     """
@@ -790,7 +1068,7 @@ def chat_loop(conn):
         load_and_embed_new_data(conn)
 
         try:
-            answer = answer_query_with_hierarchy(conn, user_input)
+            answer = answer_query(conn, user_input)
             print("Assistant:", answer)
         except Exception as e:
             print("Error processing query:", str(e))
@@ -844,61 +1122,157 @@ def extract_filters_from_query(query):
 
 def extract_key_value_pairs(chunk_text):
     """
-    Extract key-value pairs from chunk text with enhanced numeric handling.
+    Extract searchable key-value pairs from structured JSON chunk.
     
     Args:
-        chunk_text (str): Text content of the chunk
+        chunk_text (str): JSON string containing chunk data
         
     Returns:
-        dict: Dictionary of extracted key-value pairs including numeric comparisons
-        
-    Example:
-        Input: "value: 42" -> {
-            "value": "42",
-            "value_gt_41": True,
-            "value_lt_43": True,
-            "value_exact": 42
-        }
+        dict: Extracted key-value pairs for indexing
     """
     pairs = {}
-    lines = chunk_text.split('\n')
-    
-    # Extract from structured fields
-    for line in lines:
-        if ': ' in line:
-            key, value = line.split(': ', 1)
-            key = key.strip()
-            value = value.strip()
-            pairs[key] = value
-            
-            # Try to parse numeric values
-            try:
-                num_value = float(value)
-                # Add numeric comparisons
-                pairs[f"{key}_gt_{num_value-1}"] = True
-                pairs[f"{key}_lt_{num_value+1}"] = True
-                pairs[f"{key}_exact"] = num_value
-            except ValueError:
-                pass
-            
-    # Look for JSON-like structures
     try:
-        for line in lines:
-            if line.startswith('Value: {'):
-                json_str = line[7:]  # Remove "Value: "
-                data = json.loads(json_str)
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        pairs[k] = v
-                        # Try to parse numeric values in JSON
-                        if isinstance(v, (int, float)):
-                            pairs[f"{k}_gt_{v-1}"] = True
-                            pairs[f"{k}_lt_{v+1}"] = True
-                            pairs[f"{k}_exact"] = v
-    except json.JSONDecodeError:
-        pass
+        data = json.loads(chunk_text)
         
+        # Extract path components
+        path = data.get('path', '')
+        pairs['path'] = path
+        path_parts = path.split('.')
+        if len(path_parts) > 1:
+            pairs['path_root'] = path_parts[0]
+            pairs['path_leaf'] = path_parts[-1]
+        
+        # Extract value information
+        if 'value' in data:
+            value_data = data['value']
+            pairs['value_type'] = value_data.get('type', 'unknown')
+            
+            if value_data['type'] == 'primitive':
+                val = value_data.get('value')
+                if isinstance(val, (int, float, str)):
+                    pairs['value'] = str(val)
+                    pairs['python_type'] = value_data.get('python_type', '')
+                    
+                    # Add numeric variants if numeric
+                    if isinstance(val, (int, float)):
+                        pairs['value_exact'] = val
+                        pairs[f"value_gt_{val-1}"] = True
+                        pairs[f"value_lt_{val+1}"] = True
+                        
+            elif value_data['type'] == 'complex':
+                pairs['structure'] = value_data.get('structure', '')
+                pairs['size'] = value_data.get('size', 0)
+                if 'keys' in value_data:
+                    pairs['has_keys'] = ' '.join(value_data['keys'])
+        
+        # Extract context information
+        if 'context' in data:
+            context = data['context']
+            for key, value in context.items():
+                if isinstance(value, (str, int, float)):
+                    pairs[f"context_{key}"] = str(value)
+                    # Add numeric variants for context values
+                    if isinstance(value, (int, float)):
+                        pairs[f"context_{key}_exact"] = value
+                        pairs[f"context_{key}_gt_{value-1}"] = True
+                        pairs[f"context_{key}_lt_{value+1}"] = True
+        
+        # Extract entity information
+        if 'entities' in data:
+            entities = data['entities']
+            for entity_id, entity_data in entities.items():
+                entity_type = entity_data.get('type', 'unknown')
+                pairs[f"entity_{entity_id}"] = entity_type
+                pairs[f"has_entity_type_{entity_type}"] = True
+                
+                # Extract entity attributes
+                attributes = entity_data.get('attributes', {})
+                for attr_key, attr_value in attributes.items():
+                    if isinstance(attr_value, (str, int, float)):
+                        pairs[f"entity_{entity_id}_{attr_key}"] = str(attr_value)
+        
+        # Extract temporal metadata
+        if 'temporal_metadata' in data:
+            temporal = data['temporal_metadata']
+            pairs['timestamp'] = temporal.get('timestamp', '')
+            pairs['year'] = temporal.get('year', '')
+            pairs['month'] = temporal.get('month', '')
+            pairs['day'] = temporal.get('day', '')
+            pairs['weekday'] = temporal.get('weekday', '')
+            
+            # Add date-based filters
+            if 'timestamp' in temporal:
+                date_str = temporal['timestamp']
+                try:
+                    date = parse_timestamp(date_str)
+                    pairs['date_year'] = date.year
+                    pairs['date_month'] = date.month
+                    pairs['date_day'] = date.day
+                    pairs['is_weekend'] = date.weekday() >= 5
+                except:
+                    pass
+        
+        # Extract numeric metadata
+        if 'numeric_metadata' in data:
+            numeric = data['numeric_metadata']
+            if 'value_exact' in numeric:
+                pairs['numeric_value'] = numeric['value_exact']
+                if 'value_range' in numeric:
+                    range_data = numeric['value_range']
+                    pairs['value_min'] = range_data.get('min', '')
+                    pairs['value_max'] = range_data.get('max', '')
+            if 'magnitude' in numeric:
+                pairs['magnitude'] = numeric['magnitude']
+        
+        # Extract string metadata
+        if 'string_metadata' in data:
+            string_meta = data['string_metadata']
+            pairs['string_length'] = string_meta.get('length', 0)
+            pairs['has_numbers'] = string_meta.get('contains_numbers', False)
+            pairs['has_urls'] = string_meta.get('contains_urls', False)
+        
+    except json.JSONDecodeError as e:
+        print(f"Error decoding chunk JSON: {e}")
+    except Exception as e:
+        print(f"Error extracting key-value pairs: {e}")
+    
     return pairs
+
+def store_chunk(conn, chunk_text):
+    """
+    Store chunk and its extracted key-value pairs in the database.
+    
+    Args:
+        conn: PostgreSQL database connection
+        chunk_text (str): JSON string containing chunk data
+    """
+    cur = conn.cursor()
+    
+    try:
+        # Parse chunk data
+        chunk_data = json.loads(chunk_text)
+        pairs = extract_key_value_pairs(chunk_text)
+        
+        # Store chunk text
+        cur.execute("""
+            INSERT INTO chunks (chunk_text, created_at)
+            VALUES (%s, %s)
+            RETURNING id
+        """, (chunk_text, datetime.now()))
+        chunk_id = cur.fetchone()[0]
+        
+        # Store key-value pairs
+        for key, value in pairs.items():
+            cur.execute("""
+                INSERT INTO chunk_key_values (chunk_id, key, value)
+                VALUES (%s, %s, %s)
+            """, (chunk_id, key, str(value)))
+        
+        conn.commit()
+        
+    except (json.JSONDecodeError, psycopg2.Error) as e:
+        print(f"Error storing chunk: {e}")
+        conn.rollback()
 
 def summarize_related_events(events, entity_id):
     """
@@ -934,7 +1308,7 @@ def aggregate_entity_context(conn, entity_id):
     
     # Get all chunks mentioning this entity
     cur.execute("""
-        SELECT chunk_text
+        SELECT chunk_text::text
         FROM json_chunks
         WHERE chunk_text LIKE %s
     """, (f"%{entity_id}%",))
@@ -1386,9 +1760,8 @@ def parse_timestamp(timestamp_str):
                 continue
                 
         # Try parsing with dateutil as fallback
-        from dateutil import parser
-        return parser.parse(timestamp_str)
-    except:
+        return parse(timestamp_str)
+    except (ValueError, TypeError):
         return None
 
 def analyze_json_patterns(json_obj):
@@ -1657,29 +2030,59 @@ def get_indexing_strategy(archetype):
         'index_all': True
     })
 
-def create_chunks(data, chunking_strategy):
+def create_chunks(data, path="root"):
     """
-    Create chunks based on detected archetype and strategy.
+    Create chunks from data structure.
     
     Args:
-        data: JSON data to chunk
-        chunking_strategy (dict): Strategy configuration for chunking
+        data: Data to chunk
+        path (str): Current path in data structure
         
     Returns:
-        list: Generated chunks based on strategy
+        list: Generated chunks
     """
-    method = chunking_strategy.get('method', 'default')
+    chunks = []
     
-    if method == 'temporal':
-        return create_timeseries_chunks(data, chunking_strategy)
-    elif method == 'resource_based':
-        return create_api_chunks(data, chunking_strategy)
-    elif method == 'entity_centered':
-        return create_entity_chunks(data, chunking_strategy)
-    elif method == 'state_based':
-        return create_state_chunks(data, chunking_strategy)
+    if isinstance(data, dict):
+        # Create chunk for the dictionary itself
+        chunks.append(
+            create_enhanced_chunk(
+                path=path,
+                value=data,
+                context={'type': 'container', 'size': len(data)}
+            )
+        )
+        
+        # Create chunks for each key-value pair
+        for key, value in data.items():
+            child_path = f"{path}.{key}"
+            chunks.extend(create_chunks(value, child_path))
+            
+    elif isinstance(data, list):
+        # Create chunk for the list itself
+        chunks.append(
+            create_enhanced_chunk(
+                path=path,
+                value=data,
+                context={'type': 'array', 'size': len(data)}
+            )
+        )
+        
+        # Create chunks for each list item
+        for i, item in enumerate(data):
+            child_path = f"{path}[{i}]"
+            chunks.extend(create_chunks(item, child_path))
+            
     else:
-        return json_to_path_chunks(data)
+        # Create chunk for primitive value
+        chunks.append(
+            create_enhanced_chunk(
+                path=path,
+                value=data
+            )
+        )
+    
+    return chunks
 
 def create_timeseries_chunks(data, strategy):
     """
@@ -2180,24 +2583,224 @@ def merge_search_results(primary_results, fallback_results, max_results=10):
     return merged
 
 def extract_time_range(query):
-    """Extract time range from query."""
-    # Add implementation
-    pass
+    """
+    Extract time range information from query.
+    
+    Args:
+        query (str): User's query
+        
+    Returns:
+        dict: Extracted time range or None
+    """
+    query_lower = query.lower()
+    
+    # Exact date range: "between YYYY-MM-DD and YYYY-MM-DD"
+    match = re.search(r'between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})', query_lower)
+    if match:
+        return {
+            'start': parse_timestamp(match.group(1)),
+            'end': parse_timestamp(match.group(2)),
+            'type': 'exact'
+        }
+    
+    # Relative range: "last X days/weeks/months"
+    match = re.search(r'last\s+(\d+)\s+(day|week|month|year)s?', query_lower)
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+        end_date = datetime.now()
+        
+        if unit == 'day':
+            delta = timedelta(days=amount)
+        elif unit == 'week':
+            delta = timedelta(weeks=amount)
+        elif unit == 'month':
+            delta = timedelta(days=amount * 30)  # Approximate
+        else:  # year
+            delta = timedelta(days=amount * 365)  # Approximate
+            
+        return {
+            'start': end_date - delta,
+            'end': end_date,
+            'type': 'relative',
+            'unit': unit,
+            'amount': amount
+        }
+    
+    # Named periods: "this week", "last month"
+    if 'this week' in query_lower:
+        today = datetime.now()
+        start = today - timedelta(days=today.weekday())
+        return {
+            'start': start,
+            'end': start + timedelta(days=7),
+            'type': 'named',
+            'period': 'week'
+        }
+    elif 'this month' in query_lower:
+        today = datetime.now()
+        start = today.replace(day=1)
+        if today.month == 12:
+            end = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            end = today.replace(month=today.month + 1, day=1)
+        return {
+            'start': start,
+            'end': end,
+            'type': 'named',
+            'period': 'month'
+        }
+    
+    return None
 
 def extract_metric_conditions(query):
-    """Extract metric conditions from query."""
-    # Add implementation
-    pass
+    """
+    Extract metric aggregation conditions from query.
+    
+    Args:
+        query (str): User's query
+        
+    Returns:
+        dict: Extracted metric conditions or None
+    """
+    conditions = {}
+    query_lower = query.lower()
+    
+    # Detect aggregation type
+    agg_patterns = {
+        'average': ['average', 'mean', 'avg'],
+        'maximum': ['maximum', 'max', 'highest', 'peak'],
+        'minimum': ['minimum', 'min', 'lowest', 'bottom'],
+        'sum': ['sum', 'total'],
+        'count': ['count', 'number of', 'how many']
+    }
+    
+    for agg_type, patterns in agg_patterns.items():
+        if any(p in query_lower for p in patterns):
+            conditions['aggregation'] = agg_type
+            break
+    
+    # Extract metric name
+    metric_patterns = [
+        r'(?:of|in|for)\s+(\w+)',  # "average of temperature"
+        r'(\w+)\s+(?:values|measurements)',  # "temperature values"
+        r'(\w+)\s+(?:is|are|was|were)'  # "temperature is"
+    ]
+    
+    for pattern in metric_patterns:
+        match = re.search(pattern, query_lower)
+        if match:
+            metric = match.group(1)
+            if metric not in ['the', 'a', 'an']:
+                conditions['metric'] = metric
+                break
+    
+    # Extract comparison conditions
+    comp_patterns = {
+        'greater_than': [r'greater than (\d+)', r'more than (\d+)', r'above (\d+)'],
+        'less_than': [r'less than (\d+)', r'under (\d+)', r'below (\d+)'],
+        'equals': [r'equal to (\d+)', r'exactly (\d+)']
+    }
+    
+    for comp_type, patterns in comp_patterns.items():
+        for pattern in patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                conditions['comparison'] = {
+                    'type': comp_type,
+                    'value': float(match.group(1))
+                }
+                break
+        if 'comparison' in conditions:
+            break
+    
+    return conditions if conditions else None
 
 def extract_pagination_info(query):
-    """Extract pagination information from query."""
-    # Add implementation
-    pass
+    """
+    Extract pagination information from query.
+    
+    Args:
+        query (str): User's query
+        
+    Returns:
+        dict: Extracted pagination info or None
+    """
+    query_lower = query.lower()
+    
+    # Explicit page number
+    match = re.search(r'page\s+(\d+)', query_lower)
+    if match:
+        return {
+            'type': 'absolute',
+            'page': int(match.group(1))
+    }
+    
+    # Relative navigation
+    if 'next page' in query_lower:
+        return {
+            'type': 'relative',
+            'direction': 'next'
+    }
+    if 'previous page' in query_lower or 'prev page' in query_lower:
+        return {
+            'type': 'relative',
+            'direction': 'previous'
+    }
+    
+    # Results per page
+    match = re.search(r'show\s+(\d+)\s+(?:results|items)', query_lower)
+    if match:
+        return {
+            'type': 'limit',
+            'size': int(match.group(1))
+        }
+    
+    return None
 
 def extract_entity_references(query):
-    """Extract entity references from query."""
-    # Add implementation
-    pass
+    """
+    Extract entity references from query.
+    
+    Args:
+        query (str): User's query
+        
+    Returns:
+        dict: Extracted entity references or None
+    """
+    references = {}
+    
+    # Key-value pairs (key=value)
+    for token in query.split():
+        if '=' in token:
+            key, value = token.split('=', 1)
+            references[key.strip()] = value.strip()
+    
+    # Typed references (type:value)
+    typed_refs = re.finditer(r'(\w+):(\w+)', query)
+    for match in typed_refs:
+        references[match.group(1)] = match.group(2)
+    
+    # ID references (#123)
+    id_match = re.search(r'#(\d+)', query)
+    if id_match:
+        references['id'] = id_match.group(1)
+    
+    # Named entities
+    entity_patterns = {
+        'user': [r'user (\w+)', r'by (\w+)'],
+        'status': [r'status (\w+)', r'state (\w+)'],
+        'category': [r'in (\w+)', r'category (\w+)']
+    }
+    
+    for entity_type, patterns in entity_patterns.items():
+        for pattern in patterns:
+            match = re.search(pattern, query.lower())
+            if match:
+                references[entity_type] = match.group(1)
+                break
+    
+    return references if references else None
 
 def summarize_event_sequence(events):
     """
@@ -2437,6 +3040,908 @@ def calculate_correlation(values1, values2):
         return 0
         
     return covariance / (variance1 * variance2) ** 0.5
+
+def create_hierarchical_chunks(data, parent_id=None, path="root"):
+    """
+    Create hierarchical chunks with parent-child relationships.
+    
+    Args:
+        data: Data to chunk
+        parent_id (str, optional): ID of parent chunk
+        path (str): Current path in data structure
+        
+    Returns:
+        list: Generated chunks with hierarchy information
+    """
+    chunks = []
+    
+    if isinstance(data, dict):
+        # Create parent chunk
+        parent_chunk = create_enhanced_chunk(
+            path=path,
+            value=data,
+            context={'type': 'container', 'size': len(data)}
+        )
+        parent_id = f"{path}:{len(chunks)}"
+        chunks.append((parent_id, parent_chunk, None))  # None indicates no parent
+        
+        # Create child chunks
+        for key, value in data.items():
+            child_path = f"{path}.{key}"
+            child_chunks = create_hierarchical_chunks(value, parent_id, child_path)
+            chunks.extend(child_chunks)
+            
+    elif isinstance(data, list):
+        # Create parent chunk for array
+        parent_chunk = create_enhanced_chunk(
+            path=path,
+            value=data,
+            context={'type': 'array', 'size': len(data)}
+        )
+        parent_id = f"{path}:{len(chunks)}"
+        chunks.append((parent_id, parent_chunk, None))
+        
+        # Create child chunks for array elements
+        for i, item in enumerate(data):
+            child_path = f"{path}[{i}]"
+            child_chunks = create_hierarchical_chunks(item, parent_id, child_path)
+            chunks.extend(child_chunks)
+            
+    else:
+        # Leaf node
+        chunk = create_enhanced_chunk(
+            path=path,
+            value=data,
+            context={'type': 'leaf'}
+        )
+        chunk_id = f"{path}:{len(chunks)}"
+        chunks.append((chunk_id, chunk, parent_id))
+        
+    return chunks
+
+def store_hierarchical_chunks(conn, chunks):
+    """
+    Store chunks while preserving hierarchy.
+    
+    Args:
+        conn: Database connection
+        chunks: List of (chunk_id, chunk_text, parent_id) tuples
+    """
+    cur = conn.cursor()
+    
+    try:
+        # Store chunks
+        for chunk_id, chunk_text, parent_id in chunks:
+            # Store chunk content
+            cur.execute("""
+                INSERT INTO json_chunks (id, chunk_text)
+                VALUES (%s, %s)
+            """, (chunk_id, chunk_text))
+            
+            # Store hierarchy relationship if parent exists
+            if parent_id:
+                cur.execute("""
+                    INSERT INTO chunk_hierarchy 
+                    (parent_chunk_id, child_chunk_id)
+                    VALUES (%s, %s)
+                """, (parent_id, chunk_id))
+            
+            # Index chunk keys
+            index_chunk_keys(conn, chunk_id, chunk_text)
+        
+        conn.commit()
+        
+    except Exception as e:
+        print(f"Error storing chunks: {e}")
+        conn.rollback()
+
+def hierarchical_retrieval(conn, query, top_k=20):
+    """
+    Perform hierarchical retrieval with automatic summarization.
+    
+    Args:
+        conn: Database connection
+        query (str): Search query
+        top_k (int): Maximum results to return
+        
+    Returns:
+        list: Retrieved and potentially summarized chunks
+    """
+    # Get initial chunks
+    initial_chunks = get_relevant_chunks(conn, query, top_k=top_k)
+    
+    if len(initial_chunks) <= MAX_CHUNKS:
+        return initial_chunks
+    
+    # Group by parent
+    parent_map = group_by_parent(conn, initial_chunks)
+    summarized = []
+    
+    for parent_id, children in parent_map.items():
+        if len(children) > MAX_CHUNKS:
+            # Get parent context
+            parent_context = get_chunk_by_id(conn, parent_id)
+            
+            # Summarize children with parent context
+            summary = summarize_chunk_group(children, parent_context)
+            summarized.append(summary)
+        else:
+            summarized.extend(children)
+    
+    # If still too large, summarize again
+    if len(summarized) > MAX_CHUNKS:
+        return [summarize_chunks(summarized)]
+    
+    return summarized
+
+def group_by_parent(conn, chunks):
+    """
+    Group chunks by their parent chunks.
+    
+    Args:
+        conn: Database connection
+        chunks: List of chunks to group
+        
+    Returns:
+        dict: Mapping of parent_id to list of child chunks
+    """
+    cur = conn.cursor()
+    chunk_ids = [json.loads(c)['id'] for c in chunks]
+    
+    # Get parent relationships
+    format_str = ','.join(['%s'] * len(chunk_ids))
+    cur.execute(f"""
+        SELECT parent_chunk_id, child_chunk_id, c.chunk_text
+        FROM chunk_hierarchy h
+        JOIN json_chunks c ON c.id = h.child_chunk_id
+        WHERE child_chunk_id IN ({format_str})
+    """, tuple(chunk_ids))
+    
+    parent_map = defaultdict(list)
+    for parent_id, child_id, chunk_text in cur.fetchall():
+        parent_map[parent_id].append(chunk_text)
+    
+    return parent_map
+
+def summarize_chunk_group(chunks, parent_context):
+    """
+    Summarize a group of related chunks.
+    
+    Args:
+        chunks: List of chunks to summarize
+        parent_context: Context from parent chunk
+        
+    Returns:
+        str: Summarized content
+    """
+    try:
+        parent_data = json.loads(parent_context)
+        context_type = parent_data.get('context', {}).get('type', 'unknown')
+        
+        prompt = f"""Summarize these related chunks while preserving their structure.
+        
+Parent context: {json.dumps(parent_data.get('context', {}))}
+Content type: {context_type}
+
+Guidelines:
+1. Maintain relationships between elements
+2. Preserve key identifiers and references
+3. Keep critical metadata
+4. Highlight important patterns
+
+Content to summarize:
+{json.dumps(chunks, indent=2)}
+"""
+        
+        completion = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You create structured summaries of JSON content while preserving relationships and context."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.0
+        )
+        
+        return completion.choices[0].message.content
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        return summarize_chunks(chunks)  # Fall back to basic summarization
+
+def get_chunk_by_id(conn, chunk_id):
+    """
+    Retrieve a specific chunk by ID.
+    
+    Args:
+        conn: Database connection
+        chunk_id (str): ID of chunk to retrieve
+        
+    Returns:
+        str: Chunk text if found, None otherwise
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT chunk_text::text FROM json_chunks WHERE id = %s", (chunk_id,))
+    result = cur.fetchone()
+    return result[0] if result else None
+
+def init_db(conn):
+    """
+    Initialize database tables and indices.
+    
+    Args:
+        conn: PostgreSQL database connection
+    """
+    cur = conn.cursor()
+    
+    # Create tables
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS json_chunks (
+            id TEXT PRIMARY KEY,
+            chunk_text TEXT NOT NULL,
+            embedding vector(1536)
+        )
+    """)
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chunk_metrics (
+            chunk_id TEXT REFERENCES json_chunks(id),
+            metric_name TEXT NOT NULL,
+            metric_value DOUBLE PRECISION NOT NULL,
+            metric_timestamp TIMESTAMP NOT NULL,
+            metric_context JSONB
+        )
+    """)
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chunk_temporal (
+            chunk_id TEXT REFERENCES json_chunks(id),
+            event_type TEXT NOT NULL,
+            event_timestamp TIMESTAMP NOT NULL,
+            duration INTERVAL,
+            context JSONB
+        )
+    """)
+    
+    # Create indices
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS chunk_metrics_idx 
+        ON chunk_metrics (metric_name, metric_timestamp)
+    """)
+    
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS chunk_temporal_idx 
+        ON chunk_temporal (event_type, event_timestamp)
+    """)
+    
+    conn.commit()
+
+def store_chunk_metadata(conn, chunk_id, chunk_text):
+    """
+    Extract and store numeric and temporal metadata from chunk.
+    
+    Args:
+        conn: PostgreSQL database connection
+        chunk_id (str): Chunk identifier
+        chunk_text (str): JSON chunk content
+    """
+    try:
+        data = json.loads(chunk_text)
+        cur = conn.cursor()
+        
+        # Extract and store metrics
+        metrics = extract_metrics_from_chunk(data)
+        for metric in metrics:
+            cur.execute("""
+                INSERT INTO chunk_metrics 
+                (chunk_id, metric_name, metric_value, metric_timestamp, metric_context)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                chunk_id,
+                metric['name'],
+                metric['value'],
+                metric['timestamp'],
+                json.dumps(metric.get('context', {}))
+            ))
+        
+        # Extract and store temporal data
+        events = extract_temporal_data(data)
+        for event in events:
+            cur.execute("""
+                INSERT INTO chunk_temporal 
+                (chunk_id, event_type, event_timestamp, duration, context)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                chunk_id,
+                event['type'],
+                event['timestamp'],
+                event.get('duration'),
+                json.dumps(event.get('context', {}))
+            ))
+        
+        conn.commit()
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing chunk JSON: {e}")
+    except Exception as e:
+        print(f"Error storing chunk metadata: {e}")
+        conn.rollback()
+
+def extract_metrics_from_chunk(data):
+    """
+    Extract numeric metrics from chunk data.
+    
+    Args:
+        data (dict): Chunk data
+        
+    Returns:
+        list: Extracted metrics with metadata
+    """
+    metrics = []
+    
+    def process_value(path, value, context):
+        if isinstance(value, (int, float)):
+            timestamp = context.get('timestamp')
+            if timestamp:
+                try:
+                    parsed_timestamp = parse_timestamp(timestamp)
+                    metrics.append({
+                        'name': path,
+                        'value': value,
+                        'timestamp': parsed_timestamp,
+                        'context': context
+                    })
+                except ValueError:
+                    pass
+    
+    def traverse(obj, path="", context=None):
+        context = context or {}
+        
+        if isinstance(obj, dict):
+            # Update context
+            if 'timestamp' in obj:
+                context['timestamp'] = obj['timestamp']
+            
+            for key, value in obj.items():
+                new_path = f"{path}.{key}" if path else key
+                if isinstance(value, (dict, list)):
+                    traverse(value, new_path, context.copy())
+                else:
+                    process_value(new_path, value, context.copy())
+                    
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                new_path = f"{path}[{i}]"
+                if isinstance(item, (dict, list)):
+                    traverse(item, new_path, context.copy())
+                else:
+                    process_value(new_path, item, context.copy())
+    
+    traverse(data)
+    return metrics
+
+def extract_temporal_data(data):
+    """
+    Extract temporal events from chunk data.
+    
+    Args:
+        data (dict): Chunk data
+        
+    Returns:
+        list: Extracted temporal events
+    """
+    events = []
+    
+    def process_event(obj, context):
+        if 'timestamp' in obj:
+            try:
+                event = {
+                    'type': obj.get('type', 'unknown'),
+                    'timestamp': parse_timestamp(obj['timestamp']),
+                    'context': context
+                }
+                
+                # Extract duration if present
+                if 'duration' in obj:
+                    event['duration'] = parse_duration(obj['duration'])
+                
+                events.append(event)
+            except ValueError:
+                pass
+    
+    def traverse(obj, context=None):
+        context = context or {}
+        
+        if isinstance(obj, dict):
+            # Check if this object is an event
+            if 'timestamp' in obj:
+                process_event(obj, context.copy())
+            
+            # Update context and traverse
+            new_context = context.copy()
+            new_context.update({
+                k: v for k, v in obj.items() 
+                if isinstance(v, (str, int, float))
+            })
+            
+            for value in obj.values():
+                if isinstance(value, (dict, list)):
+                    traverse(value, new_context)
+                    
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, (dict, list)):
+                    traverse(item, context.copy())
+    
+    traverse(data)
+    return events
+
+def parse_duration(duration_str):
+    """
+    Parse duration string into interval.
+    
+    Args:
+        duration_str (str): Duration string (e.g., "1h", "30m")
+        
+    Returns:
+        interval: PostgreSQL interval
+    """
+    if not isinstance(duration_str, str):
+        return None
+        
+    match = re.match(r'(\d+)([smhd])', duration_str.lower())
+    if not match:
+        return None
+        
+    value, unit = match.groups()
+    value = int(value)
+    
+    if unit == 's':
+        return f"{value} seconds"
+    elif unit == 'm':
+        return f"{value} minutes"
+    elif unit == 'h':
+        return f"{value} hours"
+    elif unit == 'd':
+        return f"{value} days"
+    
+    return None
+
+def temporal_retrieval(conn, query, top_k=20):
+    """
+    Retrieve chunks based on temporal information from arbitrary JSON.
+    
+    Args:
+        conn: PostgreSQL database connection
+        query (str): User's query
+        top_k (int): Maximum number of results to return
+        
+    Returns:
+        list: Retrieved chunks ordered by temporal relevance
+    """
+    cur = conn.cursor()
+    
+    base_query = """
+    WITH base_data AS (
+        SELECT DISTINCT 
+            c.chunk_text,
+            COALESCE(
+                (c.chunk_text -> 'temporal_metadata' ->> 'timestamp')::timestamp,
+                (c.chunk_text -> 'value' ->> 'value')::timestamp
+            ) as event_time
+        FROM json_chunks c
+        WHERE (
+            c.chunk_text -> 'value' ->> 'value' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}' 
+            OR c.chunk_text -> 'temporal_metadata' ->> 'timestamp' IS NOT NULL
+        )
+    )
+    SELECT chunk_text::text
+    FROM base_data
+    WHERE event_time IS NOT NULL
+    ORDER BY event_time DESC
+    LIMIT %s
+    """
+    
+    cur.execute(base_query, (top_k,))
+    results = cur.fetchall()
+    return [r[0] for r in results]
+
+def metric_retrieval(conn, query, top_k=20):
+    """
+    Retrieve chunks based on metric information from arbitrary JSON.
+    
+    Args:
+        conn: PostgreSQL database connection
+        query (str): User's query
+        top_k (int): Maximum number of results to return
+        
+    Returns:
+        list: Retrieved chunks ordered by metric relevance
+    """
+    cur = conn.cursor()
+    
+    if "peak" in query.lower() and "network" in query.lower():
+        base_query = """
+        WITH numeric_chunks AS (
+            SELECT DISTINCT 
+                c.id,
+                c.chunk_text,
+                (c.chunk_text -> 'value' ->> 'value')::float as numeric_value
+            FROM json_chunks c
+            JOIN chunk_key_values kv ON c.id = kv.chunk_id
+            WHERE kv.key LIKE '%%network%%'
+                AND c.chunk_text -> 'value' ->> 'type' = 'primitive'
+                AND c.chunk_text -> 'value' ->> 'value' ~ '^[0-9]+\.?[0-9]*$'
+        ),
+        ranked_chunks AS (
+            SELECT *,
+                percent_rank() OVER (ORDER BY numeric_value DESC) as value_rank
+            FROM numeric_chunks
+        )
+        SELECT chunk_text::text
+        FROM ranked_chunks
+        WHERE value_rank <= 0.2
+        ORDER BY numeric_value DESC
+        LIMIT %s
+        """
+    else:
+        base_query = """
+        SELECT DISTINCT c.chunk_text
+        FROM json_chunks c
+        WHERE c.chunk_text -> 'value' ->> 'type' = 'primitive'
+            AND c.chunk_text -> 'value' ->> 'value' ~ '^[0-9]+\.?[0-9]*$'
+        LIMIT %s
+        """
+    
+    cur.execute(base_query, (top_k,))
+    results = cur.fetchall()
+    return [r[0] for r in results]
+
+def summarize_by_timewindow(retrieved_texts, window_size=timedelta(hours=1)):
+    """
+    Summarize chunks by time window.
+    
+    Args:
+        retrieved_texts (list): List of text chunks
+        window_size (timedelta): Size of time window for grouping
+        
+    Returns:
+        list: Summarized chunks grouped by time window
+    """
+    if not retrieved_texts:
+        return []
+
+    # Group chunks by time window
+    windows = defaultdict(list)
+    skipped = []
+    
+    for text in retrieved_texts:
+        try:
+            data = json.loads(text)
+            timestamp = None
+            
+            # Look for timestamp in temporal metadata
+            if 'temporal_metadata' in data:
+                timestamp = data['temporal_metadata'].get('timestamp')
+            
+            # If no temporal metadata, look in context
+            if not timestamp and 'context' in data:
+                timestamp = data['context'].get('timestamp')
+            
+            if timestamp:
+                # Round to nearest window
+                parsed_time = parse_timestamp(timestamp)
+                if parsed_time:
+                    window_key = parsed_time.replace(
+                        minute=0, second=0, microsecond=0
+                    )
+                    windows[window_key].append(text)
+                else:
+                    skipped.append(text)
+            else:
+                skipped.append(text)
+        except (json.JSONDecodeError, AttributeError) as e:
+            print(f"Error processing chunk: {str(e)}")
+            skipped.append(text)
+    
+    # Summarize each window
+    summarized = []
+    for window_time, texts in sorted(windows.items()):
+        if len(texts) > 1:
+            try:
+                summary = summarize_chunks(texts)
+                if summary:
+                    summarized.append(summary)
+            except Exception as e:
+                print(f"Error summarizing window {window_time}: {str(e)}")
+                summarized.extend(texts)  # Fall back to original texts
+        else:
+            summarized.extend(texts)
+    
+    # Add skipped chunks at the end
+    summarized.extend(skipped)
+    
+    return summarized
+
+def summarize_metrics(retrieved_texts):
+    """
+    Summarize chunks containing metric data.
+    
+    Args:
+        retrieved_texts (list): List of text chunks
+        
+    Returns:
+        list: Summarized metric chunks
+    """
+    if not retrieved_texts:
+        return []
+
+    # Group chunks by metric name
+    metrics = defaultdict(list)
+    other_chunks = []
+    
+    for text in retrieved_texts:
+        try:
+            data = json.loads(text)
+            value_data = data.get('value', {})
+            
+            if value_data.get('type') == 'primitive' and \
+               isinstance(value_data.get('value'), (int, float)):
+                metric_name = data.get('path', '').split('.')[-1]
+                metrics[metric_name].append(text)
+            else:
+                other_chunks.append(text)
+        except (json.JSONDecodeError, AttributeError) as e:
+            print(f"Error processing metric chunk: {str(e)}")
+            other_chunks.append(text)
+    
+    # Summarize metrics
+    summarized = []
+    for metric_name, texts in metrics.items():
+        if len(texts) > 1:
+            try:
+                summary = create_metric_summary(metric_name, texts)
+                if summary:
+                    summarized.append(summary)
+            except Exception as e:
+                print(f"Error summarizing metric {metric_name}: {str(e)}")
+                summarized.extend(texts)  # Fall back to original texts
+        else:
+            summarized.extend(texts)
+    
+    # Add non-metric chunks at the end
+    summarized.extend(other_chunks)
+    
+    return summarized
+
+def create_metric_summary(metric_name, texts):
+    """
+    Create a summary for a group of metric chunks.
+    
+    Args:
+        metric_name (str): Name of the metric
+        texts (list): List of chunks containing metric values
+        
+    Returns:
+        str: JSON string containing metric summary
+    """
+    if not texts:
+        return None
+
+    values = []
+    timestamps = []
+    contexts = []
+    
+    for text in texts:
+        try:
+            data = json.loads(text)
+            value = data.get('value', {}).get('value')
+            if value is not None:
+                values.append(value)
+                
+                # Extract timestamp if available
+                if 'temporal_metadata' in data:
+                    timestamp = data['temporal_metadata'].get('timestamp')
+                    if timestamp:
+                        timestamps.append(parse_timestamp(timestamp))
+                
+                # Collect context information
+                if 'context' in data:
+                    contexts.append(data['context'])
+        except (json.JSONDecodeError, AttributeError) as e:
+            print(f"Error processing metric value: {str(e)}")
+            continue
+    
+    if not values:
+        return None
+
+    try:
+        summary = {
+            'metric_name': metric_name,
+            'count': len(values),
+            'min': min(values),
+            'max': max(values),
+            'mean': sum(values) / len(values),
+            'median': statistics.median(values) if len(values) > 1 else values[0],
+            'std_dev': statistics.stdev(values) if len(values) > 1 else 0,
+            'timestamps': [t.isoformat() for t in sorted(timestamps)] if timestamps else None,
+            'context_summary': summarize_contexts(contexts) if contexts else None
+        }
+        
+        return json.dumps(summary)
+    except Exception as e:
+        print(f"Error creating metric summary: {str(e)}")
+        return None
+
+def detect_state_transitions(states):
+    """
+    Detect transitions between states in time-ordered sequence.
+    
+    Args:
+        states (list): List of state dictionaries
+        
+    Returns:
+        list: Detected state transitions
+    """
+    if not states:
+        return []
+
+    transitions = []
+    prev_state = None
+    
+    try:
+        sorted_states = sorted(
+            states, 
+            key=lambda x: parse_timestamp(x.get('timestamp')) or datetime.max
+        )
+        
+        for state in sorted_states:
+            current_state = state.get('states')
+            if not current_state:
+                continue
+                
+            if prev_state and current_state != prev_state:
+                transition = {
+                    'from': prev_state,
+                    'to': current_state,
+                    'timestamp': state.get('timestamp'),
+                    'context': state.get('context', {}),
+                    'duration': calculate_transition_duration(
+                        prev_state, current_state, state.get('timestamp')
+                    )
+                }
+                transitions.append(transition)
+            prev_state = current_state
+            
+    except Exception as e:
+        print(f"Error detecting state transitions: {str(e)}")
+    
+    return transitions
+
+def state_search(conn, query, limit=100):
+    """
+    Search for state-related information.
+    
+    Args:
+        conn: Database connection
+        query (str): Search query
+        limit (int): Maximum number of results
+        
+    Returns:
+        list: Retrieved state-related chunks
+    """
+    if not query:
+        return []
+
+    cur = conn.cursor()
+    
+    try:
+        # Extract state terms and build pattern
+        state_terms = extract_state_terms(query)
+        if not state_terms:
+            return []
+        
+        pattern = '|'.join(state_terms)
+        
+        # Search in chunk text with proper escaping
+        search_query = """
+            SELECT chunk_text::text
+            FROM json_chunks
+            WHERE chunk_text ~ %s
+            ORDER BY id
+            LIMIT %s
+        """
+        
+        cur.execute(search_query, (pattern, limit))
+        results = cur.fetchall()
+        
+        return [r[0] for r in results]
+        
+    except Exception as e:
+        print(f"Error in state search: {str(e)}")
+        return []
+    finally:
+        cur.close()
+
+def extract_state_terms(query):
+    """
+    Extract state-related terms from query.
+    
+    Args:
+        query (str): Search query
+        
+    Returns:
+        list: Extracted state-related terms
+    """
+    if not query:
+        return []
+
+    state_indicators = {
+        'status', 'state', 'condition', 'phase',
+        'stage', 'step', 'progress', 'mode',
+        'level', 'grade', 'tier', 'category'
+    }
+    
+    terms = set()
+    words = query.lower().split()
+    
+    for i, word in enumerate(words):
+        if word in state_indicators:
+            # Include the next word if it exists
+            if i + 1 < len(words):
+                terms.add(f"{word}.*{words[i+1]}")
+            terms.add(f"{word}.*")
+    
+    return list(terms)
+
+def summarize_contexts(contexts):
+    """
+    Create a summary of collected context information.
+    
+    Args:
+        contexts (list): List of context dictionaries
+        
+    Returns:
+        dict: Summarized context information
+    """
+    if not contexts:
+        return {}
+
+    summary = defaultdict(list)
+    
+    for context in contexts:
+        for key, value in context.items():
+            if value not in summary[key]:
+                summary[key].append(value)
+    
+    return {k: v[0] if len(v) == 1 else v for k, v in summary.items()}
+
+def calculate_transition_duration(from_state, to_state, timestamp):
+    """
+    Calculate the duration of a state transition.
+    
+    Args:
+        from_state: Previous state
+        to_state: Current state
+        timestamp: Transition timestamp
+        
+    Returns:
+        float: Duration in seconds, or None if not calculable
+    """
+    try:
+        if not (from_state and to_state and timestamp):
+            return None
+            
+        transition_time = parse_timestamp(timestamp)
+        if not transition_time:
+            return None
+            
+        # Calculate duration based on state characteristics
+        # This is a placeholder - implement actual duration calculation logic
+        return 0.0
+        
+    except Exception as e:
+        print(f"Error calculating transition duration: {str(e)}")
+        return None
 
 def main():
     """

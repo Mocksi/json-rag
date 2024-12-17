@@ -10,6 +10,8 @@ A tool for efficiently loading and integrating nested JSON data structures into 
   - Event sequences with causal chains
   - API responses with resource relationships
   - Metric series with trend analysis
+  - Temporal data with time-based grouping
+  - State transitions with context preservation
 
 ## Quick Start
 
@@ -40,22 +42,22 @@ python rag_app.py
 
 ## Usage Examples
 
-Query event sequences:
-```
-> Show me all events from the authentication service
-> What happened after the system alert at 2:00 PM?
-```
-
-Query API data:
-```
-> List all resources with high usage metrics
-> Show relationships between users and projects
-```
-
 Query metrics:
 ```
-> Show metrics with strong correlations
-> What metrics exceeded thresholds today?
+> Show peak network usage periods
+> What were the highest CPU metrics today?
+```
+
+Query temporal data:
+```
+> Show events from the last hour
+> What happened this week?
+```
+
+Query state changes:
+```
+> Show all state transitions
+> What was the system state yesterday?
 ```
 
 ## Data Structure Support
@@ -66,11 +68,11 @@ Query metrics:
 - Entity Relationships
 - State Machines
 - Configuration Data
+- Metric Series
 
 ## License
 
 MIT License - see LICENSE file for details.
-
 
 ## Roadmap
 
