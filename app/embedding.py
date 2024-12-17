@@ -52,3 +52,30 @@ def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
     
     cur.close()
     return retrieved_texts
+
+def get_embedding(text):
+    """
+    Generate embedding vector for input text.
+    
+    Args:
+        text (str): Text to embed
+        
+    Returns:
+        list: Embedding vector
+    """
+    try:
+        # Ensure text is string and handle empty input
+        if not text or not isinstance(text, str):
+            print(f"WARNING: Invalid text for embedding: {text}")
+            text = str(text) if text else ""
+            
+        # Generate embedding
+        embedding = embedding_model.encode([text])[0]
+        
+        print(f"DEBUG: Generated embedding of size {len(embedding)} for text: {text[:100]}...")
+        return embedding.tolist()  # Convert numpy array to list
+        
+    except Exception as e:
+        print(f"ERROR: Failed to generate embedding: {e}")
+        # Return zero vector of correct dimension as fallback
+        return [0.0] * embedding_model.get_sentence_embedding_dimension()

@@ -78,7 +78,8 @@ Additional intents: {', '.join(query_intent['all_intents'])}
 Guidelines:
 - Focus on {query_intent['primary_intent']} aspects
 - Use specific details from the context
-- Maintain relationships between entities
+- Always use human-readable names in addition to IDs when available
+- Show relationships between named entities
 - If information isn't in the context, say so
 - For temporal queries, preserve chronological order
 - For metrics, include specific values and trends
@@ -88,7 +89,7 @@ Context:
 
 Question: {query}
 
-Answer based only on the provided context."""
+Answer based only on the provided context, using human-readable names."""
 
     print("\nDEBUG: Prompt sent to OpenAI:")
     print("=" * 80)

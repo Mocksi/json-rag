@@ -205,41 +205,52 @@ def extract_entities(json_obj, current_path="$"):
             }
     return entities
 
-def json_to_path_chunks(json_obj, current_path="$", entities=None, parent_context=None, path_contexts=None):
-    from app import parsing  # If needed, careful with circular imports
-    if path_contexts is None:
-        path_contexts = {}
-    chunks = []
+def iterate_paths(json_obj, current_path="$"):
+    """
+    Recursively iterate through JSON object and yield path-value pairs.
+    
+    Args:
+        json_obj: JSON object to iterate through
+        current_path (str): Current JSON path (default: "$")
+        
+    Yields:
+        tuple: (path, value) pairs
+    """
     if isinstance(json_obj, dict):
-        path_contexts[current_path] = {
-            key: str(value) if not isinstance(value, (dict, list)) else "..."
-            for key, value in json_obj.items()
-        }
-        chunks.append(create_enhanced_chunk(
-            current_path,
-            json_obj,
-            context=path_contexts,
-            entities=entities
-        ))
-        from app import models  # If needed
         for key, value in json_obj.items():
-            from app import config
-            from app import parsing
-            # Keep your original logic
-            new_path = f"{current_path}.{key}"
-            chunks.extend(json_to_path_chunks(value, current_path=new_path, entities=entities, parent_context=json_obj, path_contexts=path_contexts))
+            new_path = f"{current_path}.{key}" if current_path else key
+            yield new_path, value
+            if isinstance(value, (dict, list)):
+                yield from iterate_paths(value, new_path)
+                
     elif isinstance(json_obj, list):
-        path_contexts[current_path + "[]"] = "..."
-        for i, item in enumerate(json_obj):
+        for i, value in enumerate(json_obj):
             new_path = f"{current_path}[{i}]"
-            chunks.extend(json_to_path_chunks(item, current_path=new_path, entities=entities, parent_context=parent_context, path_contexts=path_contexts))
-    else:
-        chunks.append(create_enhanced_chunk(
-            current_path,
-            json_obj,
-            context=path_contexts,
-            entities=entities
-        ))
+            yield new_path, value
+            if isinstance(value, (dict, list)):
+                yield from iterate_paths(value, new_path)
+
+def json_to_path_chunks(json_obj, entities=None):
+    """
+    Convert JSON object into chunks based on paths.
+    
+    Args:
+        json_obj: Parsed JSON object
+        entities (dict): Optional entity information
+        
+    Returns:
+        list: List of chunk dictionaries
+    """
+    chunks = []
+    for path, value in iterate_paths(json_obj):
+        chunk = {
+            "path": path,
+            "value": serialize_value(value),
+            "context": extract_context(json_obj, path),
+            "display_names": extract_display_names(json_obj, path),
+            "entities": extract_entities_with_names(entities, path) if entities else {}
+        }
+        chunks.append(chunk)
     return chunks
 
 def extract_key_value_pairs(chunk_text):
@@ -341,3 +352,150 @@ def extract_key_value_pairs(chunk_text):
         print(f"Error extracting key-value pairs: {e}")
     
     return pairs
+
+def process_json_document(json_obj):
+    """
+    Process a JSON document through the complete pipeline.
+    
+    Args:
+        json_obj: Parsed JSON object
+        
+    Returns:
+        tuple: (chunks, relationships)
+    """
+    # Step 1: Extract entities
+    entities = extract_entities(json_obj)
+    
+    # Step 2: Create chunks with entity context
+    chunks = json_to_path_chunks(json_obj, entities=entities)
+    
+    # Step 3: Detect relationships
+    from app.relationships import detect_relationships
+    relationships = detect_relationships(chunks)
+    
+    return chunks, relationships
+
+def extract_context(json_obj, path, max_depth=3):
+    """
+    Extract context information for a given path in JSON object.
+    
+    Args:
+        json_obj: JSON object to extract context from
+        path (str): Current JSON path
+        max_depth (int): Maximum depth of parent context to include
+        
+    Returns:
+        dict: Context information
+    """
+    context = {}
+    
+    # Split path into parts
+    parts = path.replace('][', '.').replace('[', '.').replace(']', '').split('.')
+    
+    # Build increasingly specific paths and their values
+    current = "$"
+    context[current] = str(json_obj)[:100] + '...' if len(str(json_obj)) > 100 else str(json_obj)
+    
+    for i, part in enumerate(parts[1:], 1):  # Skip the root '$'
+        try:
+            # Build the path up to this point
+            current_obj = json_obj
+            path_parts = parts[1:i+1]  # Skip root
+            
+            # Navigate to current position
+            for p in path_parts:
+                if p.isdigit():  # Handle array indices
+                    current_obj = current_obj[int(p)]
+                else:
+                    current_obj = current_obj[p]
+            
+            # Build the path string
+            if i == 1:
+                current = f"$.{part}"
+            else:
+                prev = parts[i-1]
+                if prev.isdigit():
+                    current = f"{current}[{prev}]"
+                    if not part.isdigit():
+                        current = f"{current}.{part}"
+                else:
+                    current = f"{current}.{part}"
+            
+            # Add to context with truncation for large values
+            context[current] = str(current_obj)[:100] + '...' if len(str(current_obj)) > 100 else str(current_obj)
+            
+        except (KeyError, IndexError, TypeError):
+            continue
+            
+        # Stop if we've reached max depth
+        if i >= max_depth:
+            break
+    
+    return context
+
+def extract_display_names(json_obj, path):
+    """
+    Extract human-readable names and labels from JSON object at given path.
+    
+    Args:
+        json_obj: JSON object to extract names from
+        path (str): Current JSON path
+        
+    Returns:
+        dict: Display names and labels
+    """
+    names = {}
+    
+    try:
+        # Navigate to current position
+        current_obj = json_obj
+        parts = path.replace('][', '.').replace('[', '.').replace(']', '').split('.')
+        
+        for part in parts[1:]:  # Skip root
+            if part.isdigit():
+                current_obj = current_obj[int(part)]
+            else:
+                current_obj = current_obj[part]
+        
+        # Look for name fields in current object
+        if isinstance(current_obj, dict):
+            for key in ['name', 'title', 'label', 'display_name', 'description']:
+                if key in current_obj:
+                    names[key] = str(current_obj[key])
+            
+            # Look for ID-name pairs
+            for key, value in current_obj.items():
+                if '_id' in key.lower() and isinstance(value, str):
+                    name_key = key.replace('_id', '_name')
+                    if name_key in current_obj:
+                        names[f"{key}_display"] = str(current_obj[name_key])
+                        
+    except (KeyError, IndexError, TypeError):
+        pass
+        
+    return names
+
+def extract_entities_with_names(entities, path):
+    """
+    Extract entity information with display names for a given path.
+    
+    Args:
+        entities (dict): Entity registry
+        path (str): Current JSON path
+        
+    Returns:
+        dict: Entity information with display names
+    """
+    if not entities:
+        return {}
+        
+    result = {}
+    for entity_id, info in entities.items():
+        if info['path'] == path:
+            result[entity_id] = {
+                'type': info['type'],
+                'name': info.get('name', entity_id),
+                'attributes': info.get('attributes', {}),
+                'relationships': info.get('relationships', {})
+            }
+    return result

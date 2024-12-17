@@ -2,7 +2,7 @@ from app.retrieval import answer_query
 from app.database import get_files_to_process, upsert_file_metadata
 from app.utils import compute_file_hash, get_json_files
 from app.models import FlexibleModel
-from app.parsing import extract_entities, json_to_path_chunks
+from app.parsing import extract_entities, json_to_path_chunks, extract_key_value_pairs
 from app.config import MAX_CHUNKS
 
 def load_and_embed_new_data(conn):
@@ -59,14 +59,14 @@ def load_and_embed_new_data(conn):
                     print(f"    Context: {json.dumps(context_summary, indent=2)}")
 
     all_chunks = []
-    from app.parsing import json_to_path_chunks
+    from app.parsing import json_to_path_chunks, extract_key_value_pairs
     from app.database import upsert_file_metadata
     from app.config import embedding_model
     from app.embedding import vector_search_with_filter
 
     seen_keys = set()
     for (f, f_hash, f_mtime, doc) in documents:
-        doc_chunks = json_to_path_chunks(doc, entities=entities_by_file.get(f), parent_context=None)
+        doc_chunks = json_to_path_chunks(doc, entities=entities_by_file.get(f))
         all_chunks.extend((f, chunk) for chunk in doc_chunks)
 
     if not all_chunks:
@@ -83,27 +83,74 @@ def load_and_embed_new_data(conn):
     print("Embeddings generated.")
 
     cur = conn.cursor()
-    for i, (f, text) in enumerate(all_chunks):
+    for i, (f, chunk) in enumerate(all_chunks):
         embedding_list = chunk_embeddings[i].tolist()
         embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
         chunk_id = f"{f}:{i}"
+        
+        # Serialize chunk to JSON string for storage
+        chunk_text = json.dumps(chunk)
+        
         cur.execute("""
             INSERT INTO json_chunks (id, chunk_text, embedding)
             VALUES (%s, %s, %s)
             ON CONFLICT (id) DO NOTHING;
-        """, (chunk_id, text, embedding_str))
-        from app.parsing import extract_key_value_pairs
-        pairs = extract_key_value_pairs(text)
-        for k, v in pairs.items():
-            cur.execute("""
-                INSERT INTO chunk_key_values (chunk_id, key, value)
-                VALUES (%s, %s, %s)
-            """, (chunk_id, k, str(v)))
-    conn.commit()
-    print(f"Embedded {len(all_chunks)} new chunks.")
+        """, (chunk_id, chunk_text, embedding_str))
+        
+        try:
+            # Extract key-value pairs from the chunk dictionary directly
+            pairs = {}
+            
+            # Add path information
+            path = chunk.get('path', '')
+            pairs['path'] = path
+            path_parts = path.split('.')
+            if len(path_parts) > 1:
+                pairs['path_root'] = path_parts[0]
+                pairs['path_leaf'] = path_parts[-1]
+            
+            # Add value information
+            value_data = chunk.get('value', {})
+            if isinstance(value_data, dict):
+                pairs['value_type'] = value_data.get('type', 'unknown')
+                if value_data.get('type') == 'primitive':
+                    val = value_data.get('value')
+                    if isinstance(val, (int, float, str)):
+                        pairs['value'] = str(val)
+                        pairs['python_type'] = value_data.get('python_type', '')
+            
+            # Add context information
+            for key, value in chunk.get('context', {}).items():
+                if isinstance(value, (str, int, float, bool)):
+                    pairs[f"context_{key}"] = str(value)
+            
+            # Add display names
+            for key, value in chunk.get('display_names', {}).items():
+                pairs[f"display_{key}"] = str(value)
+            
+            # Add entity information
+            for entity_id, entity_data in chunk.get('entities', {}).items():
+                pairs[f"entity_{entity_id}"] = entity_data.get('type', 'unknown')
+                if 'name' in entity_data:
+                    pairs[f"entity_{entity_id}_name"] = str(entity_data['name'])
+            
+            # Insert key-value pairs
+            for k, v in pairs.items():
+                cur.execute("""
+                    INSERT INTO chunk_key_values (chunk_id, key, value)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (chunk_id, key) DO UPDATE SET value = EXCLUDED.value;
+                """, (chunk_id, k, str(v)))
+                
+        except Exception as e:
+            print(f"Error processing chunk {chunk_id}: {e}")
+            continue
 
-    for f, f_hash, f_mtime, d in documents:
-        upsert_file_metadata(conn, f, f_hash, f_mtime)
+    conn.commit()
+    cur.close()
+    
+    print("Successfully embedded and indexed new chunks")
+    return True
 
 def initialize_embeddings(conn):
     """

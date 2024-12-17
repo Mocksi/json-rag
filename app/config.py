@@ -17,3 +17,7 @@ model_name = "sentence-transformers/all-MiniLM-L6-v2"
 embedding_model = SentenceTransformer(model_name)
 
 MAX_CHUNKS = 4  # also move this constant here as it's a config-like constant
+
+SIMILARITY_THRESHOLD = 0.85  # Minimum similarity score for semantic relationships
+MIN_RELATIONSHIP_CONFIDENCE = 0.7  # Minimum confidence for relationship detection
+MAX_SEMANTIC_MATCHES = 5  # Maximum number of semantic matches per entity

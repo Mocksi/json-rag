@@ -1,0 +1,42 @@
+{
+    "status": "success",
+    "meta": {
+      "page": 1,
+      "per_page": 2,
+      "total_items": 6
+    },
+    "data": {
+      "products": [
+        {
+          "id": "PROD-001",
+          "sku": "KB-MECH-RED",
+          "name": "Mechanical Keyboard Pro",
+          "category": "peripherals",
+          "manufacturer_id": "MFR-102",
+          "supplier_id": "SUP-201",
+          "specifications": {
+            "switch_type": "red",
+            "backlight": true,
+            "wireless": false
+          },
+          "related_products": ["PROD-002", "PROD-005"],
+          "warranty_policy_id": "WAR-001"
+        },
+        {
+          "id": "PROD-002",
+          "sku": "MS-GAMING-RGB",
+          "name": "RGB Gaming Mouse",
+          "category": "peripherals",
+          "manufacturer_id": "MFR-102",
+          "supplier_id": "SUP-202",
+          "specifications": {
+            "dpi": 16000,
+            "rgb": true,
+            "wireless": true
+          },
+          "related_products": ["PROD-001", "PROD-003"],
+          "warranty_policy_id": "WAR-001"
+        }
+      ]
+    }
+  }
