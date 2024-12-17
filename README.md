@@ -4,25 +4,34 @@ A tool for efficiently loading and integrating nested JSON data structures into 
 
 ## Key Features
 
-* **Smart Archetype Detection**: Automatically identifies data patterns (event logs, API responses, metrics, etc.)
-* **Context-Aware Chunking**: Preserves relationships and structure based on data type
-* **Intelligent Summarization**: Generates summaries tailored to data patterns:
-  - Event sequences with causal chains
-  - API responses with resource relationships
-  - Metric series with trend analysis
-  - Temporal data with time-based grouping
-  - State transitions with context preservation
-* **Advanced Intent Detection**: Automatically identifies query types:
-  - Temporal queries (time-based relationships)
-  - Metric queries (numerical analysis)
-  - Entity queries (relationship mapping)
-  - State queries (transition tracking)
+* **Advanced Query Understanding**:
+  - Temporal patterns (exact dates, relative ranges, named periods)
+  - Metric aggregations (average, maximum, minimum, sum, count)
+  - Entity relationships (direct and semantic connections)
+  - State transitions and system conditions
+  - Hybrid search combining vector similarity and filters
+
+* **Smart Data Processing**:
+  - Automatic entity detection and relationship mapping
+  - Context-aware chunking with hierarchy preservation
+  - Key-value pair extraction for filtered searches
+  - Embedded metadata tracking
+  - Batch processing with change detection
+
+* **Enhanced Retrieval**:
+  - Vector similarity search using PGVector
+  - Hierarchical context assembly
+  - Entity-aware result filtering
+  - Relationship-based context expansion
+  - Confidence scoring and ranking
+
 * **Debug Capabilities**:
-  - Query intent analysis logging
-  - Vector similarity search debugging
-  - Chunk retrieval scoring
-  - Prompt construction tracking
-  - Summarization process monitoring
+  - Query intent analysis with pattern matching
+  - Entity relationship detection logs
+  - Embedding generation details
+  - Vector search scores and filtering
+  - Chunk processing and context assembly
+  - Database operation logging
 
 ## Quick Start
 
@@ -35,69 +44,112 @@ source rag_env/bin/activate  # Windows: rag_env\Scripts\activate
 pip install -r requirements.txt
 ```
 
-2. Set up environment:
+2. Configure database:
+```bash
+# Update POSTGRES_CONN_STR in app/config.py:
+POSTGRES_CONN_STR = "dbname=myragdb user=your_user host=localhost port=5432"
+```
+
+3. Set up environment:
 ```bash
 # Create .env file with:
 OPENAI_API_KEY=your-key-here
 ```
 
-3. Initialize system:
+4. Initialize system:
 ```bash
-python rag_app.py --new  # Resets database and initializes embeddings
+python -m app.main --new  # Resets database and initializes embeddings
 ```
 
-4. Start interactive chat:
+5. Start interactive chat:
 ```bash
-python rag_app.py  # Checks for changes and updates embeddings if needed
+python -m app.main  # Checks for changes and updates embeddings if needed
 ```
 
 ## Usage Examples
 
-Query metrics:
-```
-> Show peak network usage periods
-> What were the highest CPU metrics today?
-> Show me the progression of all metrics during peak usage
+### Temporal Queries
+```bash
+# Exact date range
+> Show events between 2024-01-01 and 2024-02-01
+
+# Relative time range
+> What happened in the last 7 days
+> Show changes from the last 2 weeks
+
+# Named periods
+> Show this week's activity
+> Get all events from this month
 ```
 
-Query temporal data:
-```
-> Show events from the last hour
-> What happened this week?
-> What's the trend of errors over time?
+### Metric Queries
+```bash
+# Aggregations with conditions
+> Show average CPU usage above 80%
+> What was the peak network usage last month
+> Count all errors where status=failed
+
+# Trend analysis
+> Show the progression of memory usage
+> Track response times over the last hour
 ```
 
-Query state changes:
+### Entity Queries
+```bash
+# Direct relationships
+> Show all suppliers connected to warehouse WH-EAST
+> What items are related to order #123
+
+# Filtered searches
+> Find all transactions by user john
+> List orders with status=pending
 ```
-> Show all state transitions
-> What was the system state yesterday?
-> Track status changes during the outage
+
+### State Queries
+```bash
+# Transition tracking
+> Track status changes where category=shipping
+> Show all state transitions in the last week
+> List items that changed from pending to active
+```
+
+## Architecture
+
+```
+project_root/
+    app/
+        __init__.py
+        config.py          # Configuration and environment settings
+        database.py        # PostgreSQL interaction and schema management
+        models.py         # Data validation with Pydantic
+        parsing.py        # JSON parsing and chunk generation
+        embedding.py      # Vector embeddings and similarity search
+        retrieval.py      # Chunk retrieval and context assembly
+        intent.py         # Query intent analysis and prompt generation
+        relationships.py  # Entity relationship tracking
+        chat.py          # Interactive chat interface
+        main.py          # Application entry point
+        utils.py         # Utility functions
+    data/json_docs/      # JSON document storage
+    requirements.txt
+    .env
 ```
 
 ## Debug Mode
 
-To enable detailed debugging output:
+Enable detailed debugging output:
 ```bash
-export DEBUG_LEVEL=verbose  # Shows detailed processing information
-python rag_app.py
+export DEBUG_LEVEL=verbose
+python -m app.main
 ```
 
 Debug output includes:
-- Query intent analysis
-- Vector search scores
-- Retrieved chunk details
-- Prompt construction
-- Summarization process
-
-## Architecture
-
-The system is organized into modules:
-- `intent.py`: Query intent analysis
-- `retrieval.py`: Vector search and chunk retrieval
-- `embedding.py`: Document embedding
-- `parsing.py`: JSON structure analysis
-- `prompts.py`: LLM prompt management
-- `database.py`: PostgreSQL integration
+- Query intent analysis with pattern matches
+- Entity detection and relationship mapping
+- Embedding generation metrics
+- Vector search scores and filtering
+- Chunk processing and context assembly
+- Database operations and performance metrics
 
 ## License
 
@@ -105,10 +157,10 @@ MIT License - see LICENSE file for details.
 
 ## Roadmap
 
-- [ ] Support for streaming large JSON files
-- [ ] Additional RAG system integrations
-- [ ] Enhanced relationship mapping
-- [ ] Custom document processors
-- [ ] Advanced metadata handling
-- [ ] Improved debugging tools
-- [ ] Performance optimization
+- [ ] Streaming support for large JSON files
+- [ ] Additional embedding model options
+- [ ] Enhanced relationship visualization
+- [ ] Custom chunking strategies
+- [ ] Advanced caching mechanisms
+- [ ] Performance optimization for large datasets
+- [ ] API interface for non-interactive usage
