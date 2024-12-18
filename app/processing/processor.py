@@ -31,9 +31,9 @@ Usage:
 from typing import List, Dict, Optional
 import json
 from pathlib import Path
-from .database import store_chunk, get_chunk_with_context
-from .json_parser import process_json_file, combine_chunk_with_context
-from .embeddings import get_embedding
+from app.storage.database import store_chunk, get_chunk_with_context
+from app.processing.json_parser import process_json_file, combine_chunk_with_context
+from app.retrieval.embedding import get_embedding
 
 class JSONProcessor:
     """

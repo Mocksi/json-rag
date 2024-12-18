@@ -22,28 +22,24 @@ The module integrates with various components including:
 
 from typing import List, Dict, Optional, Tuple
 import json
-from app.parsing import extract_key_value_pairs, json_to_path_chunks
-from app.embedding import get_embedding
-from app.archetype import ArchetypeDetector
-from app.relationships import detect_relationships
-from app.database import (
+from pydantic import ValidationError
+
+from app.processing.parsing import extract_key_value_pairs, json_to_path_chunks
+from app.retrieval.embedding import get_embedding
+from app.analysis.archetype import ArchetypeDetector
+from app.analysis.relationships import detect_relationships
+from app.storage.database import (
     get_files_to_process,
     upsert_file_metadata,
-    save_chunk_archetypes
+    save_chunk_archetypes,
+    get_chunk_by_id
 )
-from app.utils import get_json_files, compute_file_hash
-from pydantic import ValidationError
-from app.retrieval import answer_query
-from app.database import upsert_file_metadata, save_chunk_archetypes
-from app.utils import get_json_files
-from app.models import FlexibleModel
-from app.config import MAX_CHUNKS, embedding_model
-from app.archetype import ArchetypeDetector
-from app.relationships import detect_relationships
-from app.json_parser import generate_chunk_id, normalize_json_path
-from typing import List, Dict
-import json
-from .logging_config import get_logger
+from app.utils.utils import get_json_files, compute_file_hash
+from app.retrieval.retrieval import answer_query
+from app.core.models import FlexibleModel
+from app.core.config import MAX_CHUNKS, embedding_model
+from app.processing.json_parser import generate_chunk_id, normalize_json_path
+from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

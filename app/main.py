@@ -1,9 +1,9 @@
 import argparse
-from app.database import init_db, reset_database
-from app.chat import chat_loop, initialize_embeddings
 import psycopg2
-from app.config import POSTGRES_CONN_STR
-from .logging_config import get_logger
+from app.storage.database import init_db, reset_database
+from app.chat import chat_loop, initialize_embeddings
+from app.core.config import POSTGRES_CONN_STR
+from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

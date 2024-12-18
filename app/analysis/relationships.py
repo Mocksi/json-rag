@@ -2,41 +2,37 @@
 """
 Relationship Detection and Analysis Module
 
-This module handles the detection, validation, and analysis of relationships between
-JSON document chunks in the RAG system. It provides functionality for both direct
-(explicit) and semantic (implicit) relationship detection between entities.
+This module provides functionality for detecting and analyzing relationships between
+JSON document chunks. It uses semantic similarity and pattern matching to identify
+connections between entities, events, and data structures.
 
 Key Features:
-    - Relationship Validation: Validates relationships based on archetype patterns
-    - Similarity Computation: Calculates semantic similarity between entities
-    - Entity Registry: Maintains a registry of entities and their relationships
-    - Archetype-Aware: Considers data archetypes in relationship scoring
-    - Bidirectional Mapping: Tracks both direct and semantic relationships
-
-The module supports various relationship types:
-    - Reference: Direct references between entities (e.g., foreign keys)
-    - Contains: Hierarchical relationships
-    - Before/After: Temporal relationships
-    - Aggregates: Data aggregation relationships
-    - Semantic: Similarity-based relationships
+    - Entity Relationship Detection
+    - Semantic Similarity Analysis
+    - Pattern-based Relationship Matching
+    - Relationship Type Classification
+    - Confidence Scoring
 
 Usage:
-    >>> from app.relationships import detect_relationships
-    >>> relationships = detect_relationships(chunks, conn)
-    >>> print(f"Found {len(relationships['direct'])} direct relationships")
+    >>> from app.analysis.relationships import detect_relationships
+    >>> chunks = [{'id': 'chunk1', 'content': {...}}, ...]
+    >>> relationships = detect_relationships(chunks)
+    >>> for rel in relationships:
+    ...     print(f"{rel['source']} -> {rel['target']}: {rel['type']}")
 """
 
 from typing import List, Dict, Optional, Tuple
 import json
 from collections import defaultdict
 import re
-from app.embedding import get_embedding
-from app.archetype import ArchetypeDetector
-from app.config import SIMILARITY_THRESHOLD
-from app.database import get_chunk_by_id
-from app.parsing import extract_key_value_pairs
 import numpy as np
-from .logging_config import get_logger
+
+from app.retrieval.embedding import get_embedding
+from app.analysis.archetype import ArchetypeDetector
+from app.core.config import SIMILARITY_THRESHOLD
+from app.storage.database import get_chunk_by_id
+from app.utils.json_utils import extract_key_value_pairs
+from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

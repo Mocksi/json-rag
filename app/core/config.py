@@ -1,24 +1,21 @@
 """
 Configuration Module for JSON RAG System
 
-This module manages all configuration settings for the JSON RAG (Retrieval-Augmented Generation)
-system, including environment variables, database connections, model settings, and system
-constants.
-
-Environment Variables:
-    OPENAI_API_KEY (required): API key for OpenAI services
-    APP_LOG_LEVEL (optional): Logging level (default: INFO)
+This module manages configuration settings for the JSON RAG (Retrieval-Augmented Generation)
+system. It handles environment variables, default settings, and runtime configuration
+for various system components.
 
 Configuration Categories:
-    - Data Storage: Paths and database connection settings
-    - Model Configuration: Embedding and language model settings
-    - System Parameters: Chunk limits and relationship thresholds
-    - API Settings: External service configurations
+    - Database Settings: Connection strings, pool sizes
+    - Embedding Model: Model selection and parameters
+    - Processing Limits: Chunk sizes, batch sizes
+    - Search Settings: Similarity thresholds, result limits
+    - Logging: Log levels and output configuration
 
 Usage:
-    >>> from app.config import POSTGRES_CONN_STR, embedding_model
-    >>> conn = psycopg2.connect(POSTGRES_CONN_STR)
-    >>> embeddings = embedding_model.encode(texts)
+    >>> from app.core.config import POSTGRES_CONN_STR, embedding_model
+    >>> print(f"Using database: {POSTGRES_CONN_STR}")
+    >>> print(f"Embedding model: {embedding_model}")
 """
 
 import os

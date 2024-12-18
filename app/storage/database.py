@@ -23,7 +23,7 @@ Database Schema:
 
 Usage:
     >>> import psycopg2
-    >>> from app.database import init_db, store_chunk
+    >>> from app.storage.database import init_db, store_chunk
     >>> conn = psycopg2.connect(DATABASE_URL)
     >>> init_db(conn)  # Initialize schema
     >>> chunk_data = {'id': 'chunk1', 'content': {...}}
@@ -41,6 +41,8 @@ import os
 import hashlib
 from datetime import datetime
 from pathlib import Path
+from app.core.config import POSTGRES_CONN_STR
+from app.utils.logging_config import get_logger
 
 def get_file_info(conn) -> Dict[str, Tuple[str, datetime]]:
     """

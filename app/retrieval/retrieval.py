@@ -6,16 +6,14 @@ import re
 import statistics
 from openai import OpenAI
 
-from app.config import MAX_CHUNKS
-from app.utils import parse_timestamp
-from app.embedding import get_embedding, vector_search_with_filter
-from app.parsing import json_to_path_chunks, extract_entities
-from app.intent import analyze_query_intent, extract_filters_from_query, get_system_prompt
-from app.database import get_files_to_process, upsert_file_metadata, init_db, get_chunk_archetypes, get_chunk_relationships
-from app.config import embedding_model
-from app.utils import get_json_files
-from app.archetype import ArchetypeDetector
-from .logging_config import get_logger
+from app.core.config import MAX_CHUNKS, embedding_model
+from app.utils.utils import parse_timestamp, get_json_files
+from app.retrieval.embedding import get_embedding, vector_search_with_filter
+from app.processing.parsing import json_to_path_chunks, extract_entities
+from app.analysis.intent import analyze_query_intent, extract_filters_from_query, get_system_prompt
+from app.storage.database import get_files_to_process, upsert_file_metadata, init_db, get_chunk_archetypes, get_chunk_relationships
+from app.analysis.archetype import ArchetypeDetector
+from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -421,7 +419,7 @@ def metric_retrieval(conn, query: str, top_k: int = 5) -> List[str]:
 def summarize_by_timewindow(retrieved_texts, window_size=timedelta(hours=1)):
     if not retrieved_texts:
         return []
-    from app.parsing import parse_timestamp
+    from app.processing.parsing import parse_timestamp
     windows = defaultdict(list)
     skipped = []
     for text in retrieved_texts:
@@ -458,7 +456,7 @@ def summarize_by_timewindow(retrieved_texts, window_size=timedelta(hours=1)):
     return summarized
 
 def create_metric_summary(metric_name, texts):
-    from app.utils import parse_timestamp
+    from app.utils.utils import parse_timestamp
     values = []
     timestamps = []
     contexts = []

@@ -1,29 +1,21 @@
 """
 JSON Parsing and Analysis Module
 
-This module provides comprehensive functionality for parsing, analyzing, and processing
-JSON documents in the RAG (Retrieval-Augmented Generation) system. It handles complex
-JSON structures with a focus on maintaining hierarchical relationships, extracting
-entities, and generating searchable chunks.
+This module handles the analysis and classification of natural language queries
+to determine their intent, extract relevant parameters, and guide the retrieval
+process. It supports multiple types of queries and can extract various filters
+and conditions.
 
-Key Features:
-    - Value Serialization: Convert Python values to structured representations
-    - Entity Detection: Extract and track entities and their relationships
-    - Path Analysis: Process JSON paths and hierarchical structures
-    - Context Extraction: Build hierarchical context for JSON elements
-    - Display Name Handling: Extract human-readable labels and names
-    - Relationship Tracking: Identify and track entity relationships
-
-The module supports complex JSON documents containing:
-    - Nested structures
-    - Arrays and collections
-    - Entity references
-    - Metadata
-    - Hierarchical relationships
-    - Named entities
+Features:
+    - Intent Classification
+    - Multi-intent classification
+    - Parameter Extraction
+    - Filter Detection
+    - Time Range Analysis
+    - Entity Reference Detection
 
 Usage:
-    >>> from app.parsing import process_json_document
+    >>> from app.processing.parsing import process_json_document
     >>> json_obj = {'data': {'users': [{'id': 1, 'name': 'John'}]}}
     >>> chunks, relationships = process_json_document(json_obj)
     >>> print(f"Generated {len(chunks)} chunks with {len(relationships)} relationships")
@@ -34,8 +26,11 @@ import math
 import re
 from datetime import datetime
 from collections import defaultdict
-from app.utils import parse_timestamp, classify_path
-from app.models import FlexibleModel
+from app.utils.utils import parse_timestamp, classify_path
+from app.core.models import FlexibleModel
+from app.core.config import MAX_CHUNKS
+from app.analysis.relationships import detect_relationships
+from app.utils.json_utils import extract_key_value_pairs
 from typing import Dict, List, Tuple
 
 def serialize_value(value):
@@ -380,7 +375,6 @@ def create_enhanced_chunk(path, value, context=None, entities=None):
         - Respects MAX_CHUNKS configuration
         - Uses version 2.0 chunk format
     """
-    from app.config import MAX_CHUNKS
     chunk_data = {
         'path': path,
         'value': serialize_value(value),
@@ -833,120 +827,6 @@ def json_to_path_chunks(json_obj: Dict, file_path: str = '', max_chunks: int = 1
     process_value(json_obj)
     return chunks[:max_chunks]
 
-def extract_key_value_pairs(chunk_data):
-    """
-    Extract searchable key-value pairs from chunk data with context preservation.
-    
-    This function analyzes chunk data to extract searchable key-value pairs,
-    including nested identifiers, context values, and path information. It
-    handles various data structures and maintains context relationships in
-    the extracted pairs.
-    
-    Args:
-        chunk_data: Chunk data to analyze, which can be:
-            - Dictionary: Processed for paths, values, and context
-            - Non-dictionary: Treated as a single value
-            - Nested structures: Recursively processed
-            
-    Returns:
-        dict: Dictionary of extracted key-value pairs where:
-            - Keys are descriptive identifiers including:
-                - Direct field names
-                - Nested path components
-                - Context prefixes
-                - Type indicators
-            - Values are string representations of:
-                - Direct values
-                - Nested identifiers
-                - Context values
-                - Path components
-                
-    Extracted Fields:
-        - path: JSONPath to the chunk
-        - value: Main chunk value
-        - context_*: Context field values
-        - *_id: Entity identifiers
-        - Nested identifier paths
-        
-    ID Types Detected:
-        - _id suffixes
-        - supplier references
-        - product references
-        - warehouse references
-        - shipment references
-        
-    Example:
-        >>> chunk = {
-        ...     'path': '$.orders[0]',
-        ...     'value': 'ORD-123',
-        ...     'context': {
-        ...         'customer_id': 'CUST-456',
-        ...         'product': {
-        ...             'id': 'PROD-789',
-        ...             'supplier_id': 'SUP-101'
-        ...         }
-        ...     }
-        ... }
-        >>> pairs = extract_key_value_pairs(chunk)
-        >>> print(pairs['path'])  # '$.orders[0]'
-        >>> print(pairs['value'])  # 'ORD-123'
-        >>> print(pairs['context_customer_id'])  # 'CUST-456'
-        >>> print(pairs['product_id'])  # 'PROD-789'
-        >>> print(pairs['product_supplier_id'])  # 'SUP-101'
-        
-    Note:
-        - Processes nested structures recursively
-        - Preserves context relationships
-        - Handles various ID patterns
-        - Converts all values to strings
-        - Maintains path information
-        - Supports debug logging
-    """
-    pairs = {}
-    
-    def extract_nested_ids(data, prefix=''):
-        """Recursively extract IDs from nested structures."""
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if any(id_type in k for id_type in ['_id', 'supplier', 'product', 'warehouse', 'shipment']):
-                    pairs[f"{prefix}{k}"] = str(v)
-                if isinstance(v, (dict, list)):
-                    extract_nested_ids(v, f"{prefix}{k}_")
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                extract_nested_ids(item, f"{prefix}{i}_")
-    
-    try:
-        # If chunk_data is not a dict, treat it as a value
-        if not isinstance(chunk_data, dict):
-            pairs['value'] = str(chunk_data)
-            return pairs
-            
-        # Process the main chunk data
-        data = chunk_data
-        
-        # Extract path and value
-        if 'path' in data:
-            pairs['path'] = data['path']
-        if 'value' in data:
-            pairs['value'] = str(data['value'])
-            
-        # Process context recursively
-        if 'context' in data:
-            extract_nested_ids(data['context'])
-            
-            # Also store direct context values
-            for key, value in data['context'].items():
-                if isinstance(value, (str, int, float)):
-                    pairs[f"context_{key}"] = str(value)
-        
-        print(f"DEBUG: Extracted pairs: {pairs}")
-        
-    except Exception as e:
-        print(f"Error extracting key-value pairs: {e}")
-    
-    return pairs
-
 def process_json_document(json_obj: Dict, file_path: str = '', max_chunks: int = 100) -> Tuple[List[Dict], List[Dict]]:
     """
     Process a JSON document into searchable chunks with relationships.
@@ -1039,7 +919,6 @@ def process_json_document(json_obj: Dict, file_path: str = '', max_chunks: int =
     chunks = json_to_path_chunks(json_obj, entities=entities)
     
     # Step 3: Detect relationships
-    from app.relationships import detect_relationships
     relationships = detect_relationships(chunks)
     
     return chunks, relationships

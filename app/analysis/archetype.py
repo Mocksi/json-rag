@@ -19,7 +19,7 @@ import re
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple, Any, Set
 import json
-from .logging_config import get_logger
+from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

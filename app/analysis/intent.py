@@ -2,28 +2,29 @@
 Query Intent Analysis Module
 
 This module handles the analysis and classification of natural language queries
-in the JSON RAG system. It detects various types of intents including temporal
-queries, metric aggregations, relationship exploration, and risk assessment.
+to determine their intent, extract relevant parameters, and guide the retrieval
+process. It supports multiple types of queries and can extract various filters
+and conditions.
 
-Key Features:
-    - Pattern-based intent detection
+Features:
+    - Intent Classification
     - Multi-intent classification
-    - Temporal range extraction
-    - Metric condition parsing
-    - Entity reference detection
-    - Risk assessment analysis
+    - Parameter Extraction
+    - Filter Detection
+    - Time Range Analysis
+    - Entity Reference Detection
 
-Example:
-    >>> from app.intent import analyze_query_intent
-    >>> intents = analyze_query_intent("Show average response time last 7 days")
-    >>> print(intents)
-    {'primary': 'metric', 'temporal': True, 'aggregation': 'average'}
+Usage:
+    >>> from app.analysis.intent import analyze_query_intent
+    >>> query = "Show me all orders from last week with status pending"
+    >>> intent = analyze_query_intent(query)
+    >>> print(f"Primary intent: {intent['primary']}")
 """
 
 import re
 from datetime import datetime, timedelta
-from app.utils import parse_timestamp
-from .logging_config import get_logger
+from app.utils.utils import parse_timestamp
+from app.utils.logging_config import get_logger
 # From your original code: extract_time_range, extract_metric_conditions, extract_pagination_info, extract_entity_references, analyze_query_intent
 
 logger = get_logger(__name__)
