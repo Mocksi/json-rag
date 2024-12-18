@@ -24,6 +24,13 @@ A tool for efficiently loading and integrating nested JSON data structures into 
   - Context-aware embedding generation
   - Hierarchical traversal limits
 
+* **Hierarchical Data Management**:
+  - Full JSON structure preservation
+  - Parent-child relationship tracking
+  - Depth-aware chunk generation
+  - Contextual embedding with ancestry
+  - Path-based chunk identification
+
 * **Enhanced Retrieval**:
   - Vector similarity search using PGVector
   - Hierarchical context assembly

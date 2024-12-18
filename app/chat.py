@@ -18,8 +18,19 @@ from app.models import FlexibleModel
 from app.config import MAX_CHUNKS, embedding_model
 from app.archetype import ArchetypeDetector
 from app.relationships import detect_relationships
+from app.json_parser import generate_chunk_id, normalize_json_path
 from typing import List, Dict
 import json
+
+def serialize_for_debug(obj):
+    """Helper function to serialize objects for debug output."""
+    if hasattr(obj, 'tolist'):  # Handle numpy arrays
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: serialize_for_debug(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_debug(x) for x in obj]
+    return obj
 
 def load_and_embed_new_data(conn):
     """Load and embed new or modified JSON files."""
@@ -37,7 +48,9 @@ def load_and_embed_new_data(conn):
     # Process each file
     all_chunks = []
     detector = ArchetypeDetector()
+    chunk_cache = {}  # Cache to store chunks by ID
     
+    # First pass: Process all files and collect chunks
     for f, f_hash, f_mtime in documents:
         print(f"\nProcessing {f}")
         
@@ -63,31 +76,30 @@ def load_and_embed_new_data(conn):
     chunk_texts = [json.dumps(c[1]) for c in all_chunks]  # Serialize chunk data
     chunk_embeddings = embedding_model.encode(chunk_texts, show_progress_bar=True)
     
-    # Store chunks and embeddings
+    # Second pass: Store all chunks and build cache
     cur = conn.cursor()
+    print("\nStoring chunks and building cache...")
     for i, (f, chunk) in enumerate(all_chunks):
-        chunk_id = f"{f}:{i}"
-        embedding_list = chunk_embeddings[i].tolist()
-        embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
+        # Generate proper chunk ID using our new system
+        chunk_id = generate_chunk_id(f, chunk.get('path', f'chunk_{i}'))
+        chunk_cache[chunk_id] = chunk  # Cache the chunk
         
-        # Detect archetypes and relationships
+        # Detect archetypes
         chunk_archetypes = detector.detect_archetypes(chunk)
-        print(f"\nDEBUG: Chunk type before relationships: {type(chunk)}")
-        print(f"DEBUG: Chunk content: {chunk}")
+        print(f"\nDEBUG: Processing chunk {chunk_id}")
+        print(f"DEBUG: Chunk path: {chunk.get('path')}")
 
         # Get archetype for embedding
         archetype = None
         if chunk_archetypes:
             archetype = {
-                'type': chunk_archetypes[0][0],  # First archetype type
-                'confidence': chunk_archetypes[0][1]  # First archetype confidence
+                'type': chunk_archetypes[0][0],
+                'confidence': chunk_archetypes[0][1]
             }
 
         # Generate embedding with archetype context
         embedding_list = get_embedding(json.dumps(chunk), archetype).tolist()
         embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
-
-        relationships = detect_relationships([chunk], conn)
         
         chunk_metadata = {
             'archetypes': [
@@ -95,47 +107,120 @@ def load_and_embed_new_data(conn):
                 for a in chunk_archetypes
             ] if chunk_archetypes else [],
             'source_file': f,
-            'chunk_index': i,
-            'relationships': relationships.get('direct', {})
+            'chunk_index': i
         }
         
         # Store the chunk with its embedding
         cur.execute("""
-            INSERT INTO json_chunks (id, chunk_text, chunk_json, embedding, metadata)
-            VALUES (%s, %s, %s::jsonb, %s::vector, %s::jsonb)
+            INSERT INTO json_chunks (
+                id, chunk_text, chunk_json, embedding, metadata,
+                path, depth, parent_id, source_file
+            )
+            VALUES (%s, %s, %s::jsonb, %s::vector, %s::jsonb, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 chunk_text = EXCLUDED.chunk_text,
                 chunk_json = EXCLUDED.chunk_json,
                 embedding = EXCLUDED.embedding,
-                metadata = EXCLUDED.metadata
+                metadata = EXCLUDED.metadata,
+                path = EXCLUDED.path,
+                depth = EXCLUDED.depth,
+                parent_id = EXCLUDED.parent_id,
+                source_file = EXCLUDED.source_file
         """, (
             chunk_id,
-            json.dumps(chunk),  # Store full chunk as text
-            json.dumps(chunk),  # Store as JSONB for querying
+            json.dumps(chunk),
+            json.dumps(chunk),
             embedding_str,
-            json.dumps(chunk_metadata)
+            json.dumps(chunk_metadata),
+            chunk.get('path', ''),  # Add path
+            chunk.get('depth', 0),  # Add depth
+            chunk.get('parent_id'),  # Add parent_id
+            f  # Add source_file
         ))
+    
+    # Third pass: Create relationships now that all chunks are cached
+    print("\nCreating relationships...")
+    
+    # First, build a map of all IDs to their chunks
+    id_to_chunk = {}
+    for i, (f, chunk) in enumerate(all_chunks):
+        chunk_id = generate_chunk_id(f, chunk.get('path', f'chunk_{i}'))
         
-        # Store relationships in dedicated table
-        if relationships.get('direct'):
-            for rel_type, rels in relationships['direct'].items():
-                for rel in rels:
-                    # Create synthetic chunk IDs for entity references
-                    source_id = f"{f}:{chunk_id}"
-                    target_id = f"entity:{rel['target']}"
-                    
-                    cur.execute("""
-                        INSERT INTO chunk_relationships 
-                        (source_chunk_id, target_chunk_id, relationship_type, metadata)
-                        VALUES (%s, %s, %s, %s::jsonb)
-                        ON CONFLICT (source_chunk_id, target_chunk_id, relationship_type) 
-                        DO UPDATE SET metadata = EXCLUDED.metadata
-                    """, (
-                        source_id,
-                        target_id, 
-                        rel['type'],
-                        json.dumps(rel['context'])
-                    ))
+        # If this chunk has an ID value, map it
+        if chunk.get('value') and isinstance(chunk.get('value'), str):
+            path_parts = chunk.get('path', '').split('.')
+            if any(part.endswith('id') or part == 'id' for part in path_parts):
+                id_to_chunk[chunk.get('value')] = {
+                    'chunk_id': chunk_id,
+                    'path': chunk.get('path'),
+                    'chunk': chunk
+                }
+    
+    # Now process relationships using the ID map
+    for i, (f, chunk) in enumerate(all_chunks):
+        chunk_id = generate_chunk_id(f, chunk.get('path', f'chunk_{i}'))
+        print(f"\nDEBUG: Processing relationships for chunk: {chunk_id}")
+        print(f"DEBUG: Chunk path: {chunk.get('path')}")
+        
+        # Extract relationships from chunk value and context
+        value = chunk.get('value')
+        context = chunk.get('context', {})
+        
+        # Helper function to extract all ID fields from a dict
+        def extract_ids(obj, prefix=''):
+            ids = {}
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str) and (k.endswith('_id') or k == 'id'):
+                        ids[prefix + k if prefix else k] = v
+                    elif isinstance(v, (dict, list)):
+                        ids.update(extract_ids(v, prefix + k + '_' if prefix else k + '_'))
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    if isinstance(item, dict):
+                        ids.update(extract_ids(item, prefix))
+            return ids
+        
+        # Extract all IDs from context
+        all_ids = extract_ids(context)
+        print(f"DEBUG: Found IDs in context: {all_ids}")
+        
+        # Create relationships for each ID
+        for key, val in all_ids.items():
+            if val in id_to_chunk:
+                target_info = id_to_chunk[val]
+                print(f"DEBUG: Found target chunk for ID {val}: {target_info['path']}")
+                
+                # Determine relationship type based on key
+                rel_type = 'reference'
+                if key.startswith('shipments_'):
+                    rel_type = 'shipment_reference'
+                elif key.startswith('warehouses_'):
+                    rel_type = 'warehouse_reference'
+                elif key.startswith('products_'):
+                    rel_type = 'product_reference'
+                elif key.startswith('suppliers_'):
+                    rel_type = 'supplier_reference'
+                
+                cur.execute("""
+                    INSERT INTO chunk_relationships 
+                    (source_chunk_id, target_chunk_id, relationship_type, metadata)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    ON CONFLICT (source_chunk_id, target_chunk_id, relationship_type) 
+                    DO UPDATE SET metadata = EXCLUDED.metadata
+                """, (
+                    chunk_id,
+                    target_info['chunk_id'],
+                    rel_type,
+                    json.dumps({
+                        'field': key,
+                        'source_path': chunk.get('path'),
+                        'target_path': target_info['path'],
+                        'target_value': val
+                    })
+                ))
+            else:
+                print(f"DEBUG: No chunk found with ID value: {val}")
     
     # Update file metadata
     for f, f_hash, f_mtime in documents:

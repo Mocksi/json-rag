@@ -136,7 +136,11 @@ def init_db(conn):
             chunk_text TEXT NOT NULL,
             chunk_json JSONB NOT NULL,
             embedding vector(384),
-            metadata JSONB DEFAULT '{}'::jsonb
+            metadata JSONB DEFAULT '{}'::jsonb,
+            parent_id TEXT REFERENCES json_chunks(id),
+            depth INTEGER DEFAULT 0,
+            path TEXT NOT NULL,
+            source_file TEXT NOT NULL
         )
     """)
     
@@ -311,3 +315,180 @@ def compute_file_hash(filepath: str) -> str:
         for byte_block in iter(lambda: f.read(4096), b""):
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
+
+def store_chunk(conn, chunk_data: Dict, embedding: List[float]) -> str:
+    """
+    Store a chunk with its embedding, metadata, and hierarchical information.
+    
+    Args:
+        conn: Database connection
+        chunk_data: Dictionary containing chunk information
+        embedding: Vector embedding for the chunk
+        
+    Returns:
+        str: ID of the stored chunk
+    """
+    cur = conn.cursor()
+    
+    # Convert embedding to string format
+    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    
+    # Extract required fields
+    chunk_id = chunk_data['id']
+    chunk_text = json.dumps(chunk_data['content'])
+    chunk_json = json.dumps(chunk_data['content'])
+    metadata = chunk_data.get('metadata', {})
+    parent_id = chunk_data.get('parent_id')
+    depth = chunk_data.get('depth', 0)
+    path = chunk_data.get('path', '')
+    source_file = chunk_data.get('source_file', '')
+    
+    # Store chunk with hierarchical information
+    cur.execute("""
+        INSERT INTO json_chunks 
+            (id, chunk_text, chunk_json, embedding, metadata, parent_id, depth, path, source_file)
+        VALUES (%s, %s, %s, %s::vector, %s::jsonb, %s, %s, %s, %s)
+        ON CONFLICT (id) DO UPDATE SET
+            chunk_text = EXCLUDED.chunk_text,
+            chunk_json = EXCLUDED.chunk_json,
+            embedding = EXCLUDED.embedding,
+            metadata = EXCLUDED.metadata,
+            parent_id = EXCLUDED.parent_id,
+            depth = EXCLUDED.depth,
+            path = EXCLUDED.path,
+            source_file = EXCLUDED.source_file
+    """, (
+        chunk_id,
+        chunk_text,
+        chunk_json,
+        embedding_str,
+        json.dumps(metadata),
+        parent_id,
+        depth,
+        path,
+        source_file
+    ))
+    
+    conn.commit()
+    return chunk_id
+
+def get_parent_chunks(conn, chunk_id: str, max_depth: int = 3) -> List[Dict]:
+    """
+    Retrieve parent chunks up to a specified depth.
+    
+    Args:
+        conn: Database connection
+        chunk_id: ID of the chunk to get parents for
+        max_depth: Maximum number of parent levels to traverse
+        
+    Returns:
+        list: List of parent chunks ordered from root to direct parent
+    """
+    parents = []
+    current_id = chunk_id
+    depth = 0
+    
+    while depth < max_depth:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT parent_id, chunk_json, metadata 
+            FROM json_chunks 
+            WHERE id = %s AND parent_id IS NOT NULL
+        """, (current_id,))
+        result = cur.fetchone()
+        
+        if not result:
+            break
+            
+        parent_id, chunk_json, metadata = result
+        parents.append({
+            'id': parent_id,
+            'content': json.loads(chunk_json),
+            'metadata': metadata
+        })
+        
+        current_id = parent_id
+        depth += 1
+        
+    return list(reversed(parents))  # Return from root to direct parent
+
+def get_child_chunks(conn, parent_id: str, max_depth: int = 2) -> List[Dict]:
+    """
+    Retrieve child chunks up to a specified depth.
+    
+    Args:
+        conn: Database connection
+        parent_id: ID of the parent chunk
+        max_depth: Maximum depth to traverse
+        
+    Returns:
+        list: List of child chunks
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        WITH RECURSIVE chunk_tree AS (
+            -- Base case: direct children
+            SELECT id, chunk_json, metadata, depth, 1 as level
+            FROM json_chunks
+            WHERE parent_id = %s
+            
+            UNION ALL
+            
+            -- Recursive case: children of children
+            SELECT c.id, c.chunk_json, c.metadata, c.depth, ct.level + 1
+            FROM json_chunks c
+            INNER JOIN chunk_tree ct ON c.parent_id = ct.id
+            WHERE ct.level < %s
+        )
+        SELECT id, chunk_json, metadata, depth
+        FROM chunk_tree
+        ORDER BY level, depth;
+    """, (parent_id, max_depth))
+    
+    return [{
+        'id': row[0],
+        'content': json.loads(row[1]),
+        'metadata': row[2],
+        'depth': row[3]
+    } for row in cur.fetchall()]
+
+def get_chunk_with_context(conn, chunk_id: str, max_parent_depth: int = 3, max_child_depth: int = 2) -> Dict:
+    """
+    Retrieve a chunk with its hierarchical context.
+    
+    Args:
+        conn: Database connection
+        chunk_id: ID of the chunk to retrieve
+        max_parent_depth: Maximum number of parent levels to include
+        max_child_depth: Maximum number of child levels to include
+        
+    Returns:
+        dict: Chunk data with parent and child context
+    """
+    # Get the main chunk
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT chunk_json, metadata, depth, path
+        FROM json_chunks
+        WHERE id = %s
+    """, (chunk_id,))
+    result = cur.fetchone()
+    
+    if not result:
+        return None
+        
+    chunk_json, metadata, depth, path = result
+    
+    # Get parent and child chunks
+    parents = get_parent_chunks(conn, chunk_id, max_parent_depth)
+    children = get_child_chunks(conn, chunk_id, max_child_depth)
+    
+    return {
+        'id': chunk_id,
+        'content': json.loads(chunk_json),
+        'metadata': metadata,
+        'depth': depth,
+        'path': path,
+        'parents': parents,
+        'children': children
+    }
