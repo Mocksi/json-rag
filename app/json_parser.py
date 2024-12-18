@@ -2,6 +2,9 @@ from typing import List, Dict, Any, Optional
 import hashlib
 import json
 from pathlib import Path
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def generate_chunk_id(source_file: str, path: str) -> str:
     """
@@ -14,7 +17,7 @@ def generate_chunk_id(source_file: str, path: str) -> str:
     Returns:
         str: MD5 hash of the combined string
     """
-    print(f"DEBUG: generate_chunk_id input - source_file: {source_file}, path: {path}")
+    logger.debug(f"DEBUG: generate_chunk_id input - source_file: {source_file}, path: {path}")
     
     # Clean up the source file path - remove duplicates and normalize
     source_file = str(Path(source_file).resolve())
@@ -26,18 +29,18 @@ def generate_chunk_id(source_file: str, path: str) -> str:
     
     # Remove any duplicate file paths that might have been added to the path
     if source_file in path:
-        print(f"DEBUG: Found duplicate file path in path, removing: {path}")
+        logger.debug(f"DEBUG: Found duplicate file path in path, removing: {path}")
         path = path.replace(source_file + ':', '')
         path = path.replace(source_file + '/', '')
-        print(f"DEBUG: After removing duplicate: {path}")
+        logger.debug(f"DEBUG: After removing duplicate: {path}")
     
     # Create a unique string combining file and path
     unique_str = f"{source_file}:{path}"
-    print(f"DEBUG: Final unique string: {unique_str}")
+    logger.debug(f"DEBUG: Final unique string: {unique_str}")
     
     # Generate MD5 hash
     chunk_id = hashlib.md5(unique_str.encode()).hexdigest()
-    print(f"DEBUG: Generated chunk ID: {chunk_id}")
+    logger.debug(f"DEBUG: Generated chunk ID: {chunk_id}")
     
     return chunk_id
 

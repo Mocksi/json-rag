@@ -9,6 +9,9 @@ from app.config import SIMILARITY_THRESHOLD
 from app.database import get_chunk_by_id
 from app.parsing import extract_key_value_pairs
 import numpy as np
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def validate_relationship(source_archetype: str, target_archetype: str, relationship_type: str) -> Tuple[bool, float]:
     """Validate and score a relationship based on archetype patterns."""
@@ -96,7 +99,7 @@ def detect_relationships(chunks, conn):
     entity_registry = {}
     chunk_id_map = {}  # Map entity IDs to chunk IDs
     
-    print("\nDEBUG: Processing chunks for relationships...")
+    logger.debug("Processing chunks for relationships...")
     
     # First pass: extract key-value pairs and build entity registry
     for chunk in chunks:
@@ -123,7 +126,7 @@ def detect_relationships(chunks, conn):
                               '_name', 'name_', 'name'
                           ])}
             
-            print(f"DEBUG: Found entity pairs: {entity_pairs}")
+            logger.debug(f"Found entity pairs: {entity_pairs}")
             
             for key, value in entity_pairs.items():
                 entity_id = str(value)
@@ -149,7 +152,7 @@ def detect_relationships(chunks, conn):
                     }
                     
                     if display_name:
-                        print(f"DEBUG: Registered entity {entity_id} with name '{display_name}'")
+                        logger.debug(f"Registered entity {entity_id} with name '{display_name}'")
                 
                 # Store relationship using chunk IDs
                 if isinstance(chunk, dict):
@@ -185,10 +188,10 @@ def detect_relationships(chunks, conn):
                             direct_relations[chunk_id].append(relation)
                 
         except Exception as e:
-            print(f"ERROR: Failed to process chunk for relationships: {e}")
+            logger.error(f"Failed to process chunk for relationships: {e}")
             continue
     
-    print(f"\nDEBUG: Found {len(direct_relations)} entities with direct relationships")
+    logger.debug(f"Found {len(direct_relations)} entities with direct relationships")
     
     # Second pass: compute semantic relationships
     for entity_id, entity_data in entity_registry.items():

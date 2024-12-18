@@ -8,6 +8,9 @@ import re
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple, Any, Set
 import json
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 class ArchetypeDetector:
     """
@@ -78,7 +81,7 @@ class ArchetypeDetector:
             >>> print("Archetypes:", results["archetypes"])
             >>> print("Relationships:", results["relationships"])
         """
-        print("\nAnalyzing dataset-wide patterns...")
+        logger.debug("Analyzing dataset-wide patterns...")
         
         archetype_results = []
         relationships = []
@@ -89,13 +92,13 @@ class ArchetypeDetector:
             archetype_results.append(archetypes)
             relationships.extend(self.detect_relationships(data))
 
-        print("\nArchetype Results:")
+        logger.debug("Archetype Results:")
         for i, result in enumerate(archetype_results):
-            print(f"Structure {i}: {result}")
+            logger.debug(f"Structure {i}: {result}")
         
-        print("\nDetected Relationships:")
+        logger.debug("Detected Relationships:")
         for rel in relationships:
-            print(f"{rel['source']} -> {rel['target']} ({rel['type']})")
+            logger.debug(f"{rel['source']} -> {rel['target']} ({rel['type']})")
         
         return {
             "archetypes": archetype_results, 
@@ -346,7 +349,7 @@ class ArchetypeDetector:
             Detected event_log with 0.90 confidence
             Detected metric_data with 0.45 confidence
         """
-        print("detect_archetypes called with data:", data)  # Added debug print
+        logger.debug("detect_archetypes called with data:", data)  # Added debug print
         
         scores = {
             'event_log': self._score_event_log(data),
@@ -358,14 +361,14 @@ class ArchetypeDetector:
         }
         
         # Add debug print for raw scores
-        print(f"Raw scores: {scores}")
+        logger.debug(f"Raw scores: {scores}")
         
         # Only keep high-confidence matches
         detected = [(atype, score) for atype, score in scores.items() if score > 0.2]
         detected_sorted = sorted(detected, key=lambda x: x[1], reverse=True)
         
         # Add print statement to show detected archetypes
-        print(f"Detected archetypes: {detected_sorted} for data: {json.dumps(data, indent=2)}")
+        logger.debug(f"Detected archetypes: {detected_sorted} for data: {json.dumps(data, indent=2)}")
         
         return detected_sorted  # Added return statement
 
@@ -543,9 +546,9 @@ class ArchetypeDetector:
                 if isinstance(value, (dict, list)):
                     self._analyze_structure(value, current_path)
                 else:
-                    print(f"Analyzing path: {current_path} -> {value}")
+                    logger.debug(f"Analyzing path: {current_path} -> {value}")
                     archetypes = self.detect_archetypes({key: value})
-                    print(f"Detected archetypes at {current_path}: {archetypes}")
+                    logger.debug(f"Detected archetypes at {current_path}: {archetypes}")
         elif isinstance(data, list):
             for index, item in enumerate(data):
                 current_path = f"{path}[{index}]"

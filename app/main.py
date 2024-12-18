@@ -3,6 +3,9 @@ from app.database import init_db, reset_database
 from app.chat import chat_loop, initialize_embeddings
 import psycopg2
 from app.config import POSTGRES_CONN_STR
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def main():
     """
@@ -24,7 +27,7 @@ def main():
     conn = psycopg2.connect(POSTGRES_CONN_STR)
     
     if args.new:
-        print("Initializing new database...")
+        logger.info("Initializing new database...")
         reset_database(conn)
         init_db(conn)
         initialize_embeddings(conn)

@@ -1,7 +1,69 @@
 import re
 from datetime import datetime, timedelta
 from app.utils import parse_timestamp
+from .logging_config import get_logger
 # From your original code: extract_time_range, extract_metric_conditions, extract_pagination_info, extract_entity_references, analyze_query_intent
+
+logger = get_logger(__name__)
+
+# Define query intent patterns
+patterns = {
+    'relationship': [
+        r'related to',
+        r'connected with',
+        r'linked to',
+        r'associated with',
+        r'depends on',
+        r'references',
+        r'relationship between'
+    ],
+    'temporal': [
+        r'between\s+\d{4}-\d{2}-\d{2}\s+and\s+\d{4}-\d{2}-\d{2}',
+        r'last\s+\d+\s+(?:day|week|month|year)s?',
+        r'this (?:week|month|year)',
+        r'since\s+\d{4}-\d{2}-\d{2}',
+        r'before\s+\d{4}-\d{2}-\d{2}',
+        r'after\s+\d{4}-\d{2}-\d{2}'
+    ],
+    'metric': [
+        r'average|mean|avg',
+        r'maximum|max|highest|peak',
+        r'minimum|min|lowest|bottom',
+        r'sum|total',
+        r'count|number of|how many',
+        r'greater than|more than|above',
+        r'less than|under|below',
+        r'equal to|exactly'
+    ],
+    'risk': [
+        r'risk|danger|hazard',
+        r'warning|alert|critical',
+        r'threshold|limit|boundary',
+        r'violation|breach|exceed',
+        r'compliance|conform|adhere'
+    ]
+}
+
+def determine_primary_intent(intents):
+    """
+    Determine the primary intent from a set of detected intents.
+    Uses a priority-based approach where certain intents take precedence.
+    
+    Args:
+        intents (set): Set of detected intents
+        
+    Returns:
+        str: Primary intent or 'general' if no specific intent is detected
+    """
+    # Priority order for intents
+    priority_order = ['risk', 'temporal', 'metric', 'relationship']
+    
+    # Return the first matching intent based on priority
+    for intent in priority_order:
+        if intent in intents:
+            return intent
+            
+    return 'general'
 
 def extract_time_range(query):
     """
@@ -221,110 +283,37 @@ def analyze_query_intent(query):
     query_lower = query.lower()
     intents = set()
     
-    patterns = {
-        'relationship': [
-            # Direct relationships
-            r'influence', r'impact', r'affect',
-            r'relationship', r'connection', r'linked',
-            r'between', r'among', r'across',
-            # Indirect relationships
-            r'through', r'via', r'chain',
-            r'path', r'flow', r'network',
-            # Comparative relationships
-            r'compare', r'versus', r'vs',
-            r'relative to', r'compared to',
-            r'discrepanc(y|ies)', r'difference',
-            r'actual vs', r'against',
-            # Connected entities
-            r'considering', r'based on', r'related to',
-            r'involving', r'including', r'with'
-        ],
-        'temporal': [
-            # Time points
-            r'when', r'time', r'date',
-            r'current', r'latest', r'recent',
-            # Time ranges
-            r'during', r'period', r'interval',
-            r'between.*and', r'from.*to',
-            # Relative time
-            r'next', r'last', r'previous',
-            r'upcoming', r'future', r'past'
-        ],
-        'metric': [
-            # Basic metrics
-            r'how many', r'amount', r'number',
-            r'value', r'level', r'quantity',
-            # Aggregations
-            r'average', r'mean', r'median',
-            r'total', r'sum', r'aggregate',
-            # Comparisons
-            r'more than', r'less than',
-            r'greater', r'higher', r'lower',
-            r'maximum', r'minimum', r'peak'
-        ],
-        'risk': [
-            # Risk indicators
-            r'risk', r'threat', r'danger',
-            r'warning', r'alert', r'critical',
-            # Analysis terms
-            r'analysis', r'assessment',
-            r'evaluation', r'measure',
-            # Discrepancies
-            r'gap', r'deviation', r'variance',
-            r'discrepancy', r'difference'
-        ],
-        'comparison': [
-            r'compare', r'vs', r'versus',
-            r'actual.*vs', r'contracted.*vs',
-            r'discrepanc(y|ies)', r'difference',
-            r'deviation', r'variance',
-            r'expected.*actual', 'planned.*actual'
-        ]
-    }
-    
-    # Check patterns and add intents
-    for intent_type, pattern_list in patterns.items():
-        matches = [p for p in pattern_list if re.search(p, query_lower)]
-        if matches:
-            intents.add(intent_type)
-            print(f"DEBUG: {intent_type.title()} matches: {matches}")
-    
-    # Add 'general' intent if no others found
-    if not intents:
-        intents.add('general')
-        print("DEBUG: No specific intent detected, using 'general'")
-    
-    # Determine primary intent based on combinations
-    primary = 'general'
-    if intents - {'general'}:
-        if 'comparison' in intents:
-            primary = 'relationship'
-        elif 'risk' in intents:
-            # Risk queries usually need relationship traversal
-            primary = 'relationship'
-            if 'temporal' in intents:
-                # Add temporal for future predictions
-                intents.add('temporal')
-        elif 'relationship' in intents:
-            primary = 'relationship'
-        elif 'temporal' in intents and 'metric' in intents:
-            primary = 'temporal'
-        elif 'metric' in intents:
-            primary = 'metric'
-        elif 'temporal' in intents:
-            primary = 'temporal'
-    
-    # Force relationship intent when multiple factors need consideration
-    if 'considering' in query_lower or 'based on' in query_lower:
-        primary = 'relationship'
+    # Check for relationship patterns
+    relationship_matches = [p for p in patterns['relationship'] if re.search(p, query_lower)]
+    if relationship_matches:
+        logger.debug(f"Relationship matches: {relationship_matches}")
         intents.add('relationship')
     
+    # Check for temporal patterns
+    temporal_matches = [p for p in patterns['temporal'] if re.search(p, query_lower)]
+    if temporal_matches:
+        logger.debug(f"Temporal matches: {temporal_matches}")
+        intents.add('temporal')
+    
+    # Check for metric patterns
+    metric_matches = [p for p in patterns['metric'] if re.search(p, query_lower)]
+    if metric_matches:
+        logger.debug(f"Metric matches: {metric_matches}")
+        intents.add('metric')
+    
+    # Check for risk patterns
+    risk_matches = [p for p in patterns['risk'] if re.search(p, query_lower)]
+    if risk_matches:
+        logger.debug(f"Risk matches: {risk_matches}")
+        intents.add('risk')
+    
+    # Determine primary intent
+    primary_intent = determine_primary_intent(intents)
     result = {
-        'primary_intent': primary,
+        'primary_intent': primary_intent,
         'all_intents': list(intents)
     }
-    
-    print(f"DEBUG: Final intent analysis: {result}")
+    logger.debug(f"Final intent analysis: {result}")
     return result
 
 def extract_filters_from_query(query):

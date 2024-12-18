@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 import re
 import statistics
-import openai
+from openai import OpenAI
 
 from app.config import MAX_CHUNKS
 from app.utils import parse_timestamp
@@ -15,6 +15,12 @@ from app.database import get_files_to_process, upsert_file_metadata, init_db, ge
 from app.config import embedding_model
 from app.utils import get_json_files
 from app.archetype import ArchetypeDetector
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
+# Initialize the client
+client = OpenAI()
 
 # Include your retrieval logic: get_relevant_chunks, hybrid_retrieval, hierarchical_retrieval, etc.
 # We'll place get_relevant_chunks and others here:
@@ -122,7 +128,7 @@ def get_relevant_chunks(conn, query: str, top_k: int = 5) -> List[Dict]:
             'relationships': relationships if relationships else []
         }
         enriched_chunks.append(enriched_chunk)
-        print(f"\nDEBUG: Retrieved chunk {id} with {len(relationships) if relationships else 0} relationships")
+        logger.debug(f"Retrieved chunk {id} with {len(relationships) if relationships else 0} relationships")
     
     cur.close()
     return enriched_chunks
@@ -202,10 +208,10 @@ Question: {query}
 
 Answer based only on the provided context, using human-readable names."""
 
-    print("\nDEBUG: Prompt sent to OpenAI:")
-    print("=" * 80)
-    print(prompt)
-    print("=" * 80)
+    logger.debug("DEBUG: Prompt sent to OpenAI:")
+    logger.debug("=" * 80)
+    logger.debug(prompt)
+    logger.debug("=" * 80)
     
     return prompt
 
@@ -219,12 +225,12 @@ def summarize_chunks(chunks):
     Returns:
         str: Summarized text
     """
-    print("\nDEBUG: Summarizing chunks:")
+    logger.debug("DEBUG: Summarizing chunks:")
     for i, chunk in enumerate(chunks):
-        print(f"Chunk {i}:")
-        print("-" * 40)
-        print(chunk)
-        print("-" * 40)
+        logger.debug(f"Chunk {i}:")
+        logger.debug("-" * 40)
+        logger.debug(chunk)
+        logger.debug("-" * 40)
     
     prompt = """Summarize these chunks of context, preserving:
 1. Chronological order of events
@@ -234,9 +240,9 @@ def summarize_chunks(chunks):
 Context:
 """ + "\n\n".join(chunks)
 
-    print("\nDEBUG: Sending summarization prompt to OpenAI")
+    logger.debug("DEBUG: Sending summarization prompt to OpenAI")
     
-    completion = openai.ChatCompletion.create(
+    completion = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You summarize text while preserving chronological order and temporal relationships."},
@@ -248,7 +254,6 @@ Context:
     return completion.choices[0].message.content.strip()
 
 def summarize_chunk_group(chunks, parent_context):
-    import openai
     try:
         parent_data = json.loads(parent_context)
         context_type = parent_data.get('context', {}).get('type', 'unknown')
@@ -268,7 +273,7 @@ Content to summarize:
 {json.dumps(chunks, indent=2)}
 """
         
-        completion = openai.ChatCompletion.create(
+        completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You create structured summaries of JSON content while preserving relationships and context."},
@@ -279,7 +284,7 @@ Content to summarize:
         
         return completion.choices[0].message.content
     except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
+        logger.error(f"Error parsing JSON: {e}")
         return summarize_chunks(chunks)
 
 def get_chunk_by_id(conn, chunk_id):
@@ -410,7 +415,7 @@ def metric_retrieval(conn, query: str, top_k: int = 5) -> List[str]:
         if isinstance(chunk.get('content'), dict):
             extract_metrics(chunk['content'])
     
-    print(f"\nDEBUG: Generated {len(context_entries)} metric entries")
+    logger.debug(f"Generated {len(context_entries)} metric entries")
     return context_entries
 
 def summarize_by_timewindow(retrieved_texts, window_size=timedelta(hours=1)):
@@ -560,9 +565,7 @@ def answer_query(conn, query):
     
     prompt = build_prompt(query, retrieved_texts, query_intent)
     
-    from app.intent import get_system_prompt
-    import openai
-    completion = openai.ChatCompletion.create(
+    completion = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
             {
@@ -799,9 +802,9 @@ def analyze_related_chunks(conn, query: str, base_chunks: List[Dict]) -> List[Di
         
         if rows:
             analysis_results = pattern['analysis'](rows)
-            print(f"\nDEBUG: Cross-reference analysis ({comparison_type}):")
+            logger.debug(f"Cross-reference analysis ({comparison_type}):")
             for result in analysis_results:
-                print(f"  - {result}")
+                logger.debug(f"  - {result}")
             
             # Enrich original chunks with analysis
             for chunk in base_chunks:

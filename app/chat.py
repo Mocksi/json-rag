@@ -21,6 +21,9 @@ from app.relationships import detect_relationships
 from app.json_parser import generate_chunk_id, normalize_json_path
 from typing import List, Dict
 import json
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def serialize_for_debug(obj):
     """Helper function to serialize objects for debug output."""
@@ -40,10 +43,10 @@ def load_and_embed_new_data(conn):
     documents = get_files_to_process(conn, compute_file_hash, get_json_files)
     
     if not documents:
-        print("No new or modified files to process.")
+        logger.info("No new or modified files to process.")
         return True
         
-    print(f"Found {len(documents)} files to process")
+    logger.info(f"Found {len(documents)} files to process")
     
     # Process each file
     all_chunks = []
@@ -52,13 +55,13 @@ def load_and_embed_new_data(conn):
     
     # First pass: Process all files and collect chunks
     for f, f_hash, f_mtime in documents:
-        print(f"\nProcessing {f}")
+        logger.info(f"Processing {f}")
         
         try:
             with open(f, 'r') as file:
                 data = json.load(file)
         except Exception as e:
-            print(f"Error loading file {f}: {e}")
+            logger.error(f"Error loading file {f}: {e}")
             continue
         
         # Generate chunks with metadata
@@ -69,8 +72,8 @@ def load_and_embed_new_data(conn):
         print("No chunks to embed from new files.")
         return True
 
-    print(f"Generated {len(all_chunks)} chunks")
-    print("Generating embeddings...")
+    logger.info(f"Generated {len(all_chunks)} chunks")
+    logger.info("Generating embeddings...")
 
     # Generate embeddings in batches
     chunk_texts = [json.dumps(c[1]) for c in all_chunks]  # Serialize chunk data
@@ -78,7 +81,7 @@ def load_and_embed_new_data(conn):
     
     # Second pass: Store all chunks and build cache
     cur = conn.cursor()
-    print("\nStoring chunks and building cache...")
+    logger.info("Storing chunks and building cache...")
     for i, (f, chunk) in enumerate(all_chunks):
         # Generate proper chunk ID using our new system
         chunk_id = generate_chunk_id(f, chunk.get('path', f'chunk_{i}'))
@@ -86,8 +89,8 @@ def load_and_embed_new_data(conn):
         
         # Detect archetypes
         chunk_archetypes = detector.detect_archetypes(chunk)
-        print(f"\nDEBUG: Processing chunk {chunk_id}")
-        print(f"DEBUG: Chunk path: {chunk.get('path')}")
+        logger.debug(f"Processing chunk {chunk_id}")
+        logger.debug(f"Chunk path: {chunk.get('path')}")
 
         # Get archetype for embedding
         archetype = None
@@ -139,7 +142,7 @@ def load_and_embed_new_data(conn):
         ))
     
     # Third pass: Create relationships now that all chunks are cached
-    print("\nCreating relationships...")
+    logger.info("Creating relationships...")
     
     # First, build a map of all IDs to their chunks
     id_to_chunk = {}
@@ -159,8 +162,8 @@ def load_and_embed_new_data(conn):
     # Now process relationships using the ID map
     for i, (f, chunk) in enumerate(all_chunks):
         chunk_id = generate_chunk_id(f, chunk.get('path', f'chunk_{i}'))
-        print(f"\nDEBUG: Processing relationships for chunk: {chunk_id}")
-        print(f"DEBUG: Chunk path: {chunk.get('path')}")
+        logger.debug(f"Processing relationships for chunk: {chunk_id}")
+        logger.debug(f"Chunk path: {chunk.get('path')}")
         
         # Extract relationships from chunk value and context
         value = chunk.get('value')
@@ -183,13 +186,13 @@ def load_and_embed_new_data(conn):
         
         # Extract all IDs from context
         all_ids = extract_ids(context)
-        print(f"DEBUG: Found IDs in context: {all_ids}")
+        logger.debug(f"Found IDs in context: {all_ids}")
         
         # Create relationships for each ID
         for key, val in all_ids.items():
             if val in id_to_chunk:
                 target_info = id_to_chunk[val]
-                print(f"DEBUG: Found target chunk for ID {val}: {target_info['path']}")
+                logger.debug(f"Found target chunk for ID {val}: {target_info['path']}")
                 
                 # Determine relationship type based on key
                 rel_type = 'reference'
@@ -220,7 +223,7 @@ def load_and_embed_new_data(conn):
                     })
                 ))
             else:
-                print(f"DEBUG: No chunk found with ID value: {val}")
+                logger.debug(f"No chunk found with ID value: {val}")
     
     # Update file metadata
     for f, f_hash, f_mtime in documents:
@@ -229,7 +232,7 @@ def load_and_embed_new_data(conn):
     conn.commit()
     cur.close()
     
-    print("Successfully embedded and indexed new chunks")
+    logger.info("Successfully embedded and indexed new chunks")
     return True
 
 def initialize_embeddings(conn):
