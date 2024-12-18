@@ -88,26 +88,14 @@ MIT License - see LICENSE file for details.
 
 ## Roadmap
 
-### Priority Fixes (Q2 2024)
-- Implement robust state transition handling
-- Enhance batch processing with better change detection
-- Improve archetype-based scoring system
-- Strengthen relationship-based context expansion
-
-### Optimization Areas (Q3 2024)
-- Enhance metric aggregation capabilities
-- Refine confidence scoring algorithms
-- Improve entity filtering rules
-- Optimize context assembly performance
-
-### Cross-File Data Integration (Q3-Q4 2024)
-- Develop unified schema for multi-file data sources
-- Implement relationship mapping between different JSON files
-- Create efficient cross-file querying mechanisms
-- Build context preservation across file boundaries
-- Add validation for cross-file data consistency
-
-### Maintenance (Ongoing)
-- Continue monitoring performance of well-implemented features
-- Document best practices for existing strong features
-- Set up automated testing for critical functionality
+- [ ] State transition handling improvements
+- [ ] Batch processing optimization
+- [ ] Archetype scoring system enhancements
+- [ ] Relationship-based context expansion
+- [ ] Metric aggregation capabilities
+- [ ] Confidence scoring algorithm refinement
+- [ ] Entity filtering rules improvement
+- [ ] Context assembly performance optimization
+- [ ] Cross-file data integration and unified schema
+- [ ] Automated testing implementation
+- [ ] Documentation and best practices
