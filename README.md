@@ -82,6 +82,33 @@ app/
     main.py           # Entry point
 ```
 
+## Installation Requirements
+
+- Python 3.8 or higher
+- PostgreSQL 12 or higher with PGVector extension
+- OpenAI API key
+- Required Python packages (see requirements.txt)
+
+## Documentation
+
+The codebase features comprehensive inline documentation:
+- Detailed module-level docstrings explaining key concepts
+- Function and class documentation with examples
+- Type hints and parameter descriptions
+- Usage examples and implementation notes
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+- Setting up your development environment
+- Code style guidelines
+- Pull request process
+- Development workflow
+
+## Code of Conduct
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior.
+
 ## License
 
 MIT License - see LICENSE file for details.
@@ -97,5 +124,4 @@ MIT License - see LICENSE file for details.
 - [ ] Entity filtering rules improvement
 - [ ] Context assembly performance optimization
 - [ ] Cross-file data integration and unified schema
-- [ ] Automated testing implementation
-- [ ] Documentation and best practices
+

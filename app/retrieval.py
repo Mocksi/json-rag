@@ -819,7 +819,64 @@ def analyze_related_chunks(conn, query: str, base_chunks: List[Dict]) -> List[Di
     return base_chunks
 
 def post_process_chunks(chunks: List[Dict], query_intent: Dict) -> List[Dict]:
-    """Post-process retrieved chunks based on query intent."""
+    """
+    Apply intent-specific post-processing to retrieved chunks.
+    
+    This function performs additional processing on retrieved chunks based on
+    the detected query intent. It can aggregate metrics, process temporal data,
+    analyze relationships, or perform risk analysis depending on the intent.
+    
+    Args:
+        chunks (List[Dict]): Retrieved chunks to process, each containing:
+            - content: The chunk's data
+            - metadata: Additional chunk information
+            - relationships: Connected entities
+        query_intent (Dict): Query intent information containing:
+            - primary_intent: Main query intent
+            - all_intents: List of all detected intents
+            
+    Returns:
+        List[Dict]: Processed chunks with additional context based on intent:
+            - For aggregation: Includes statistical summaries
+            - For temporal: Includes time-based organization
+            - For relationships: Includes connection analysis
+            - For risk: Includes alert and warning analysis
+            
+    Processing Types:
+        Aggregation:
+            - Combines related metrics
+            - Calculates statistics
+            - Groups by category
+            
+        Temporal:
+            - Orders by timestamp
+            - Groups by time period
+            - Tracks sequences
+            
+        Relationship:
+            - Maps connections
+            - Traces dependencies
+            - Groups related items
+            
+        Risk Analysis:
+            - Identifies warnings
+            - Detects anomalies
+            - Flags critical issues
+            
+    Example:
+        >>> intent = {"primary_intent": "risk_analysis", "all_intents": ["risk"]}
+        >>> processed = post_process_chunks(chunks, intent)
+        >>> for chunk in processed:
+        ...     if chunk.get("alerts"):
+        ...         print(f"Found {len(chunk['alerts'])} alerts")
+    
+    Note:
+        - Processing type determined by intent
+        - Original chunks preserved if no processing needed
+        - Nested data structures fully traversed
+        - Alert patterns configurable
+        - Relationships preserved
+    """
     
     def analyze_risk_metrics(chunk_list):
         """Analyze risk indicators and metrics across chunks."""
@@ -875,7 +932,64 @@ def post_process_chunks(chunks: List[Dict], query_intent: Dict) -> List[Dict]:
     return chunks
 
 def format_response(chunks: List[Dict], query_archetype: str) -> Dict:
-    """Format response based on archetype patterns."""
+    """
+    Format retrieved chunks based on query archetype patterns.
+    
+    This function structures the response format according to the detected
+    query archetype, providing appropriate organization and summaries for
+    different types of data.
+    
+    Args:
+        chunks (List[Dict]): Retrieved chunks to format
+        query_archetype (str): Detected archetype of the query:
+            - 'metric_data': Numerical and statistical data
+            - 'event_log': Time-based events and logs
+            - 'entity_definition': Entity information and relationships
+            
+    Returns:
+        Dict: Formatted response containing:
+            - For metric_data:
+                - metrics: List of metric chunks
+                - summary: Count of data points
+            - For event_log:
+                - timeline: Time-ordered events
+                - summary: Count of events
+            - For entity_definition:
+                - entity: Primary entity chunk
+                - related: Related entity chunks
+                - summary: Entity relationship summary
+            - Default:
+                - results: Raw chunk list
+                
+    Response Formats:
+        Metric Data:
+            - Preserves numerical precision
+            - Includes unit information
+            - Groups related metrics
+            
+        Event Log:
+            - Chronological ordering
+            - Timestamp preservation
+            - Event sequence context
+            
+        Entity Definition:
+            - Primary entity focus
+            - Related entity grouping
+            - Relationship context
+            
+    Example:
+        >>> response = format_response(chunks, "event_log")
+        >>> print(f"Found {len(response['timeline'])} events")
+        >>> for event in response['timeline']:
+        ...     print(f"{event['timestamp']}: {event['description']}")
+    
+    Note:
+        - Format determined by archetype
+        - Defaults to raw results if no archetype
+        - Maintains data integrity
+        - Preserves relationships
+        - Includes summary statistics
+    """
     if not query_archetype:
         return {'results': chunks}
         

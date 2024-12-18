@@ -1,3 +1,12 @@
+"""
+JSON Parser Module
+
+This module handles the parsing and chunking of JSON documents for RAG processing.
+It includes utilities for generating unique chunk IDs, normalizing JSON paths,
+and converting JSON structures into processable chunks while preserving hierarchy
+and relationships.
+"""
+
 from typing import List, Dict, Any, Optional
 import hashlib
 import json
@@ -11,11 +20,15 @@ def generate_chunk_id(source_file: str, path: str) -> str:
     Generate a unique chunk ID based on source file and path.
     
     Args:
-        source_file: Source file path
-        path: JSON path within the file
+        source_file (str): Source file path
+        path (str): JSON path within the file
         
     Returns:
         str: MD5 hash of the combined string
+        
+    Note:
+        The function normalizes paths to ensure consistent IDs across
+        different operating systems and path representations.
     """
     logger.debug(f"DEBUG: generate_chunk_id input - source_file: {source_file}, path: {path}")
     
@@ -49,14 +62,14 @@ def normalize_json_path(path: str) -> str:
     Normalize a JSON path to ensure consistent formatting.
     
     Args:
-        path: JSON path to normalize
+        path (str): Raw JSON path string
         
     Returns:
-        str: Normalized path
+        str: Normalized path string with consistent separators and formatting
         
     Example:
-        >>> normalize_json_path("data.users[0].profile")
-        'data.users.0.profile'
+        >>> normalize_json_path("root[0].items.name")
+        "root.0.items.name"
     """
     # Remove any leading/trailing dots or spaces
     path = path.strip().strip('.')
@@ -75,19 +88,39 @@ def normalize_json_path(path: str) -> str:
     
     return path
 
-def json_to_path_chunks(data: Any, source_file: str, parent_id: Optional[str] = None, path: str = '', depth: int = 0) -> List[Dict]:
+def json_to_path_chunks(
+    data: Any,
+    source_file: str,
+    parent_id: Optional[str] = None,
+    path: str = '',
+    depth: int = 0
+) -> List[Dict]:
     """
-    Convert JSON data to chunks while preserving hierarchical relationships.
+    Convert a JSON structure into a list of chunks with path information.
+    
+    This function recursively traverses a JSON structure and creates chunks
+    that preserve the hierarchical relationships and context.
     
     Args:
-        data: JSON data to process
-        source_file: Source file path
-        parent_id: ID of parent chunk
-        path: Current JSON path
-        depth: Current depth in the hierarchy
+        data (Any): JSON data to process
+        source_file (str): Path to the source JSON file
+        parent_id (Optional[str]): ID of the parent chunk
+        path (str): Current JSON path
+        depth (int): Current recursion depth
         
     Returns:
-        list: List of chunks with hierarchical information
+        List[Dict]: List of chunks, each containing:
+            - id: Unique chunk identifier
+            - content: The chunk's JSON content
+            - path: Full JSON path to the chunk
+            - parent_id: ID of parent chunk (if any)
+            - metadata: Additional chunk information
+            
+    Note:
+        The function implements smart chunking strategies based on:
+        - Data structure complexity
+        - Semantic completeness
+        - Maximum chunk size constraints
     """
     chunks = []
     
@@ -161,13 +194,21 @@ def json_to_path_chunks(data: Any, source_file: str, parent_id: Optional[str] = 
 
 def process_json_file(file_path: str) -> List[Dict]:
     """
-    Process a JSON file and convert it to chunks with hierarchical information.
+    Process a JSON file and convert it into chunks.
     
     Args:
-        file_path: Path to the JSON file
+        file_path (str): Path to the JSON file to process
         
     Returns:
-        list: List of chunks with hierarchical information
+        List[Dict]: List of processed chunks with metadata
+        
+    Raises:
+        FileNotFoundError: If the file doesn't exist
+        json.JSONDecodeError: If the file contains invalid JSON
+        
+    Note:
+        This is the main entry point for processing JSON files.
+        It handles file reading, JSON parsing, and chunk generation.
     """
     file_path = Path(file_path)
     if not file_path.exists():
@@ -180,13 +221,21 @@ def process_json_file(file_path: str) -> List[Dict]:
 
 def get_chunk_hierarchy_info(chunk: Dict) -> Dict:
     """
-    Extract hierarchy information from a chunk.
+    Extract hierarchical information from a chunk.
     
     Args:
-        chunk: Chunk dictionary
+        chunk (Dict): The chunk to analyze
         
     Returns:
-        dict: Hierarchy information including depth and path
+        Dict: Hierarchy information including:
+            - depth: Nesting level in the JSON structure
+            - parent_path: Path to parent node
+            - child_paths: List of immediate child paths
+            - siblings: List of sibling paths
+            
+    Note:
+        This information is used for context assembly and
+        relationship tracking in the RAG system.
     """
     return {
         'id': chunk['id'],
@@ -198,15 +247,25 @@ def get_chunk_hierarchy_info(chunk: Dict) -> Dict:
 
 def combine_chunk_with_context(chunk: Dict, parents: List[Dict], children: List[Dict]) -> str:
     """
-    Combine chunk content with its hierarchical context for embedding generation.
+    Combine a chunk with its contextual information.
+    
+    Creates a text representation of a chunk that includes relevant
+    context from parent and child nodes for better semantic understanding.
     
     Args:
-        chunk: Main chunk
-        parents: List of parent chunks
-        children: List of child chunks
+        chunk (Dict): The main chunk to process
+        parents (List[Dict]): List of parent chunks
+        children (List[Dict]): List of child chunks
         
     Returns:
-        str: Combined content for embedding
+        str: A formatted string containing the chunk content with
+             hierarchical context suitable for embedding generation
+        
+    Note:
+        The context assembly is optimized for:
+        - Semantic completeness
+        - Relationship preservation
+        - Embedding model token limits
     """
     context_parts = []
     

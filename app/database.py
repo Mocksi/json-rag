@@ -1,3 +1,40 @@
+"""
+Database Management Module for JSON RAG System
+
+This module provides database operations for the JSON RAG (Retrieval-Augmented Generation) system,
+handling storage, retrieval, and management of JSON document chunks, embeddings, and metadata.
+It implements a hierarchical storage system that maintains relationships between document chunks
+and supports efficient vector similarity search.
+
+Key Features:
+    - Chunk Management: Store and retrieve document chunks with embeddings
+    - File Tracking: Monitor changes in JSON files for incremental updates
+    - Relationship Mapping: Track parent-child and cross-reference relationships
+    - Archetype Detection: Store and retrieve detected data patterns
+    - Vector Search: Support for semantic similarity search
+    - Schema Evolution: Track and manage database schema changes
+
+Database Schema:
+    - json_chunks: Main table for document chunks and embeddings
+    - file_metadata: Track file changes and processing status
+    - chunk_key_values: Store searchable key-value pairs
+    - chunk_archetypes: Store detected data patterns
+    - chunk_relationships: Track relationships between chunks
+
+Usage:
+    >>> import psycopg2
+    >>> from app.database import init_db, store_chunk
+    >>> conn = psycopg2.connect(DATABASE_URL)
+    >>> init_db(conn)  # Initialize schema
+    >>> chunk_data = {'id': 'chunk1', 'content': {...}}
+    >>> store_chunk(conn, chunk_data, embedding)
+
+Note:
+    - All functions expect a valid PostgreSQL connection object
+    - Vector operations require the pgvector extension
+    - Functions handle database transactions internally
+"""
+
 from typing import List, Dict, Optional, Tuple
 import json
 import os
@@ -5,36 +42,67 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 
-def get_file_info(conn):
+def get_file_info(conn) -> Dict[str, Tuple[str, datetime]]:
     """
-    Retrieves stored file metadata from the database.
+    Retrieve stored file metadata from the database.
+    
+    This function queries the file_metadata table to get information about
+    previously processed files. It's used to detect changes in JSON files
+    between runs of the system.
     
     Args:
         conn: PostgreSQL database connection
         
     Returns:
-        dict: Mapping of filenames to tuples of (hash, modified_time)
+        dict: Mapping of filenames to tuples of (hash, modified_time), where:
+            - filename (str): Path to the JSON file
+            - hash (str): SHA-256 hash of file contents
+            - modified_time (datetime): Last modification timestamp
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> file_info = get_file_info(conn)
+        >>> for filename, (file_hash, mod_time) in file_info.items():
+        ...     print(f"{filename}: {mod_time}")
         
     Note:
-        Used to detect changes in JSON files between runs
+        - Used by the change detection system
+        - Returns empty dict if no files have been processed
+        - Timestamps are in UTC
     """
     cur = conn.cursor()
     cur.execute("SELECT filename, file_hash, last_modified FROM file_metadata;")
     rows = cur.fetchall()
     return {r[0]: (r[1], r[2]) for r in rows}
 
-def upsert_file_metadata(conn, filename, file_hash, mod_time):
+def upsert_file_metadata(conn, filename: str, file_hash: str, mod_time: datetime) -> None:
     """
-    Updates or inserts file metadata in the database.
+    Update or insert file metadata in the database.
+    
+    This function maintains the file_metadata table, which tracks the state
+    of processed JSON files. It uses an UPSERT operation to handle both new
+    and existing files efficiently.
     
     Args:
         conn: PostgreSQL database connection
-        filename (str): Name of file
-        file_hash (str): Hash of file contents
-        mod_time (datetime): Last modification time
+        filename (str): Path to the JSON file
+        file_hash (str): SHA-256 hash of file contents
+        mod_time (datetime): Last modification timestamp (UTC)
+        
+    Example:
+        >>> from datetime import datetime
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> upsert_file_metadata(
+        ...     conn,
+        ...     "data/users.json",
+        ...     "abc123def456",
+        ...     datetime.utcnow()
+        ... )
         
     Note:
-        Uses UPSERT (INSERT ... ON CONFLICT) to handle both new and existing files
+        - Uses ON CONFLICT DO UPDATE for atomic operations
+        - Automatically commits the transaction
+        - Timestamps should be in UTC
     """
     cur = conn.cursor()
     query = """
@@ -47,22 +115,46 @@ def upsert_file_metadata(conn, filename, file_hash, mod_time):
     cur.execute(query, (filename, file_hash, mod_time))
     conn.commit()
 
-def get_files_to_process(conn, compute_file_hash, get_json_files):
+def get_files_to_process(conn, compute_file_hash, get_json_files) -> List[Tuple[str, str, datetime]]:
     """
-    Gets list of files that need processing based on changes.
+    Get list of files that need processing based on detected changes.
     
+    This function implements the change detection system, comparing current
+    file states with stored metadata to identify files that are new or
+    have been modified since their last processing.
+    
+    Process Flow:
+        1. Retrieve stored file metadata from database
+        2. Scan directory for current JSON files
+        3. Compare file hashes and timestamps
+        4. Return list of files needing processing
+        
     Args:
         conn: PostgreSQL database connection
         compute_file_hash: Function to compute file hash
         get_json_files: Function to get list of JSON files
         
     Returns:
-        list: Tuples of (filename, hash, modified_time) for files needing processing
+        list: Tuples of (filename, hash, modified_time) for files needing
+            processing, where:
+            - filename (str): Path to the JSON file
+            - hash (str): Current SHA-256 hash of file contents
+            - modified_time (datetime): Current modification timestamp
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> files = get_files_to_process(
+        ...     conn,
+        ...     compute_file_hash,
+        ...     get_json_files
+        ... )
+        >>> for f, h, t in files:
+        ...     print(f"Processing {f} modified at {t}")
         
-    Process:
-        1. Gets existing file metadata from database
-        2. Compares with current files on disk
-        3. Returns files that are new or have changed
+    Note:
+        - Only returns files that are new or modified
+        - Uses SHA-256 hashing for change detection
+        - All timestamps are in UTC
     """
     existing_info = get_file_info(conn)
     files = get_json_files()
@@ -79,16 +171,43 @@ def get_files_to_process(conn, compute_file_hash, get_json_files):
                 to_process.append((f, f_hash, f_mtime))
     return to_process
 
-def reset_database(conn):
+def reset_database(conn) -> None:
     """
-    Resets the database by truncating all tables.
+    Reset the database by truncating all tables.
     
+    This function provides a way to completely reset the database state
+    by truncating all tables. It requires explicit user confirmation
+    before proceeding with the destructive operation.
+    
+    Process Flow:
+        1. Display warning message
+        2. Request user confirmation
+        3. If confirmed, truncate all tables
+        4. If error occurs, rollback changes
+        
     Args:
         conn: PostgreSQL database connection
         
+    Tables Affected:
+        - json_chunks
+        - file_metadata
+        - schema_evolution
+        - chunk_key_values
+        - chunk_archetypes
+        - chunk_relationships
+        
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> reset_database(conn)
+        Warning: This will delete all stored embeddings and metadata.
+        Are you sure you want to reset the database? (yes/no): yes
+        Database reset complete.
+        
     Note:
-        Requires user confirmation before proceeding
-        Handles errors with rollback
+        - Requires explicit 'yes' confirmation
+        - Operation is atomic (all-or-nothing)
+        - Handles errors with automatic rollback
+        - Cannot be undone after completion
     """
     print("Warning: This will delete all stored embeddings and metadata.")
     confirmation = input("Are you sure you want to reset the database? (yes/no): ")
@@ -113,19 +232,61 @@ def reset_database(conn):
     finally:
         cur.close()
 
-def init_db(conn):
+def init_db(conn) -> None:
     """
-    Initializes database schema by creating required tables.
+    Initialize database schema by creating required tables.
     
+    This function sets up the initial database schema for the JSON RAG system.
+    It creates all necessary tables if they don't already exist, including
+    tables for storing document chunks, embeddings, metadata, and relationships.
+    
+    Schema Details:
+        json_chunks:
+            - id: Unique identifier for each chunk
+            - chunk_text: Raw text representation
+            - chunk_json: JSON structure of the chunk
+            - embedding: Vector representation (384 dimensions)
+            - metadata: Additional chunk information
+            - parent_id: Reference to parent chunk
+            - depth: Nesting level in document
+            - path: JSON path to chunk
+            - source_file: Original file path
+            
+        file_metadata:
+            - filename: Path to JSON file
+            - file_hash: SHA-256 hash of contents
+            - last_modified: Timestamp of last change
+            
+        chunk_key_values:
+            - chunk_id: Reference to chunk
+            - key: Searchable key name
+            - value: Associated value
+            
+        chunk_archetypes:
+            - chunk_id: Reference to chunk
+            - archetype: Detected pattern type
+            - confidence: Detection confidence score
+            - detected_at: Timestamp of detection
+            
+        chunk_relationships:
+            - source_chunk: Reference to source chunk
+            - target_chunk: Reference to target chunk
+            - relationship_type: Type of relationship
+            - metadata: Additional relationship data
+            - detected_at: Timestamp of detection
+            
     Args:
         conn: PostgreSQL database connection
         
-    Tables Created:
-        - json_chunks: Stores document chunks and their embeddings
-        - file_metadata: Tracks file changes
-        - chunk_key_values: Stores searchable key-value pairs
-        - chunk_archetypes: Stores detected archetypes for chunks
-        - chunk_relationships: Stores relationships between chunks
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> init_db(conn)  # Creates all tables
+        
+    Note:
+        - Safe to call multiple times (uses IF NOT EXISTS)
+        - Requires pgvector extension for embeddings
+        - All tables use appropriate foreign key constraints
+        - Automatically commits changes
     """
     cur = conn.cursor()
     
@@ -188,8 +349,35 @@ def init_db(conn):
     
     conn.commit()
 
-def save_chunk_archetypes(conn, chunk_id: str, archetypes: List[Tuple[str, float]]):
-    """Save chunk archetypes to database."""
+def save_chunk_archetypes(conn, chunk_id: str, archetypes: List[Tuple[str, float]]) -> None:
+    """
+    Save detected archetypes for a document chunk.
+    
+    This function stores or updates the archetype classifications for a given
+    document chunk. Each archetype represents a detected data pattern with an
+    associated confidence score.
+    
+    Args:
+        conn: PostgreSQL database connection
+        chunk_id (str): Unique identifier of the chunk
+        archetypes: List of tuples (archetype_name, confidence_score), where:
+            - archetype_name (str): Name of the detected pattern
+            - confidence_score (float): Confidence level (0.0 to 1.0)
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> archetypes = [
+        ...     ('event_log', 0.95),
+        ...     ('metric_data', 0.75)
+        ... ]
+        >>> save_chunk_archetypes(conn, 'chunk123', archetypes)
+        
+    Note:
+        - Uses UPSERT to handle updates
+        - Automatically commits changes
+        - Timestamps are set automatically
+        - Existing archetypes are updated with new confidence scores
+    """
     cur = conn.cursor()
     for archetype, confidence in archetypes:
         cur.execute("""
@@ -201,26 +389,38 @@ def save_chunk_archetypes(conn, chunk_id: str, archetypes: List[Tuple[str, float
     conn.commit()
     cur.close()
 
-def save_chunk_relationships(conn, relationships: List[Dict]):
+def save_chunk_relationships(conn, relationships: List[Dict]) -> None:
     """
-    Save detected relationships between chunks.
+    Save detected relationships between document chunks.
+    
+    This function stores or updates relationships between chunks, maintaining
+    a graph-like structure of connections in the document collection. Each
+    relationship has a type and optional metadata.
     
     Args:
         conn: PostgreSQL database connection
-        relationships: List of relationship dictionaries with:
-            - source: Source chunk ID
-            - target: Target chunk ID
-            - type: Relationship type
-            - metadata (optional): Additional relationship data
+        relationships: List of relationship dictionaries containing:
+            - source (str): ID of source chunk
+            - target (str): ID of target chunk
+            - type (str): Relationship type (e.g., 'parent', 'reference')
+            - metadata (dict, optional): Additional relationship data
             
     Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
         >>> relationships = [{
         ...     'source': 'chunk123',
         ...     'target': 'chunk456',
         ...     'type': 'key-based',
-        ...     'metadata': {'key_name': 'user_id'}
+        ...     'metadata': {'key_name': 'user_id', 'confidence': 0.95}
         ... }]
         >>> save_chunk_relationships(conn, relationships)
+        
+    Note:
+        - Uses UPSERT to handle updates
+        - Automatically commits changes
+        - Timestamps are updated on each save
+        - Handles errors with automatic rollback
+        - Metadata is stored as JSONB for flexible querying
     """
     cur = conn.cursor()
     query = """
@@ -251,14 +451,33 @@ def save_chunk_relationships(conn, relationships: List[Dict]):
 
 def get_chunk_archetypes(conn, chunk_id: str) -> List[Tuple[str, float]]:
     """
-    Retrieve archetypes for a specific chunk.
+    Retrieve archetype classifications for a document chunk.
+    
+    This function fetches all detected archetypes and their confidence scores
+    for a given chunk. Results are ordered by confidence score in descending
+    order.
     
     Args:
         conn: PostgreSQL database connection
-        chunk_id: ID of the chunk
+        chunk_id (str): Unique identifier of the chunk
         
     Returns:
-        list: List of (archetype, confidence) tuples
+        list: Tuples of (archetype_name, confidence_score), where:
+            - archetype_name (str): Name of the detected pattern
+            - confidence_score (float): Confidence level (0.0 to 1.0)
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> archetypes = get_chunk_archetypes(conn, 'chunk123')
+        >>> for archetype, confidence in archetypes:
+        ...     print(f"{archetype}: {confidence:.2f}")
+        event_log: 0.95
+        metric_data: 0.75
+        
+    Note:
+        - Returns empty list if no archetypes found
+        - Results are sorted by confidence (highest first)
+        - Confidence scores are normalized to [0.0, 1.0]
     """
     cur = conn.cursor()
     cur.execute("""
@@ -271,14 +490,36 @@ def get_chunk_archetypes(conn, chunk_id: str) -> List[Tuple[str, float]]:
 
 def get_chunk_relationships(conn, chunk_id: str) -> List[Dict]:
     """
-    Retrieve relationships for a specific chunk.
+    Retrieve relationships for a specific document chunk.
+    
+    This function fetches all relationships where the specified chunk is
+    either the source or target. It returns both incoming and outgoing
+    relationships, providing a complete view of the chunk's connections.
     
     Args:
         conn: PostgreSQL database connection
-        chunk_id: ID of the chunk
+        chunk_id (str): Unique identifier of the chunk
         
     Returns:
-        list: List of relationship dictionaries
+        list: List of relationship dictionaries containing:
+            - source (str): ID of source chunk
+            - target (str): ID of target chunk
+            - type (str): Relationship type
+            - metadata (dict): Additional relationship data
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> relationships = get_chunk_relationships('chunk123')
+        >>> for rel in relationships:
+        ...     print(f"{rel['type']}: {rel['source']} -> {rel['target']}")
+        reference: chunk123 -> chunk456
+        parent: chunk789 -> chunk123
+        
+    Note:
+        - Returns both incoming and outgoing relationships
+        - Returns empty list if no relationships found
+        - Metadata is parsed from JSONB to Python dict
+        - Relationship types are preserved as stored
     """
     cur = conn.cursor()
     cur.execute("""
@@ -298,7 +539,36 @@ def get_chunk_relationships(conn, chunk_id: str) -> List[Dict]:
     return relationships
 
 def get_chunk_by_id(conn, chunk_id: str) -> Optional[Dict]:
-    """Get chunk data by ID."""
+    """
+    Retrieve a document chunk by its unique identifier.
+    
+    This function fetches a specific chunk's data and metadata from the
+    database. It's commonly used to resolve references and retrieve
+    detailed chunk information.
+    
+    Args:
+        conn: PostgreSQL database connection
+        chunk_id (str): Unique identifier of the chunk
+        
+    Returns:
+        dict or None: Chunk data if found, containing:
+            - content: Original JSON content of the chunk
+            - metadata: Additional chunk information
+            Returns None if chunk not found
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> chunk = get_chunk_by_id(conn, 'chunk123')
+        >>> if chunk:
+        ...     print(f"Content: {chunk['content']}")
+        ...     print(f"Metadata: {chunk['metadata']}")
+        
+    Note:
+        - Returns None if chunk doesn't exist
+        - JSON content is automatically parsed
+        - Efficient single-row query
+        - Does not include embedding vector
+    """
     cur = conn.cursor()
     cur.execute("""
         SELECT chunk_json, metadata 
@@ -309,7 +579,30 @@ def get_chunk_by_id(conn, chunk_id: str) -> Optional[Dict]:
     return json.loads(result[0]) if result else None
 
 def compute_file_hash(filepath: str) -> str:
-    """Compute SHA-256 hash of file contents."""
+    """
+    Compute SHA-256 hash of a file's contents.
+    
+    This function generates a cryptographic hash of a file's contents,
+    used for detecting changes in files between processing runs. It reads
+    the file in chunks to efficiently handle large files.
+    
+    Args:
+        filepath (str): Path to the file to hash
+        
+    Returns:
+        str: Hexadecimal string of the SHA-256 hash
+        
+    Example:
+        >>> file_hash = compute_file_hash('data/users.json')
+        >>> print(f"File hash: {file_hash}")
+        File hash: 8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92
+        
+    Note:
+        - Uses SHA-256 algorithm
+        - Processes file in 4KB chunks
+        - Returns lowercase hex string
+        - Handles large files efficiently
+    """
     sha256_hash = hashlib.sha256()
     with open(filepath, "rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
@@ -318,15 +611,45 @@ def compute_file_hash(filepath: str) -> str:
 
 def store_chunk(conn, chunk_data: Dict, embedding: List[float]) -> str:
     """
-    Store a chunk with its embedding, metadata, and hierarchical information.
+    Store a document chunk with its embedding and metadata.
+    
+    This function handles the storage of document chunks, including their
+    vector embeddings, hierarchical information, and metadata. It supports
+    both new chunks and updates to existing ones through UPSERT operations.
     
     Args:
-        conn: Database connection
-        chunk_data: Dictionary containing chunk information
-        embedding: Vector embedding for the chunk
+        conn: PostgreSQL database connection
+        chunk_data (dict): Chunk information containing:
+            - id (str): Unique chunk identifier
+            - content (dict): JSON content of the chunk
+            - metadata (dict, optional): Additional chunk information
+            - parent_id (str, optional): ID of parent chunk
+            - depth (int, optional): Nesting level in document
+            - path (str): JSON path to chunk
+            - source_file (str): Original file path
+        embedding (list[float]): Vector embedding (384 dimensions)
         
     Returns:
         str: ID of the stored chunk
+        
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> chunk = {
+        ...     'id': 'chunk123',
+        ...     'content': {'name': 'Example'},
+        ...     'metadata': {'type': 'user'},
+        ...     'path': '$.users[0]',
+        ...     'source_file': 'data/users.json'
+        ... }
+        >>> embedding = [0.1, 0.2, ..., 0.384]  # 384 dimensions
+        >>> chunk_id = store_chunk(conn, chunk, embedding)
+        
+    Note:
+        - Handles UPSERT operations automatically
+        - Converts embedding to database vector format
+        - Preserves hierarchical relationships
+        - Automatically commits changes
+        - Validates embedding dimensions
     """
     cur = conn.cursor()
     
@@ -374,15 +697,39 @@ def store_chunk(conn, chunk_data: Dict, embedding: List[float]) -> str:
 
 def get_parent_chunks(conn, chunk_id: str, max_depth: int = 3) -> List[Dict]:
     """
-    Retrieve parent chunks up to a specified depth.
+    Retrieve parent chunks up to a specified depth in the hierarchy.
+    
+    This function traverses up the chunk hierarchy, collecting parent chunks
+    until it reaches either the root or the specified maximum depth. The
+    results are ordered from root to direct parent.
     
     Args:
-        conn: Database connection
-        chunk_id: ID of the chunk to get parents for
-        max_depth: Maximum number of parent levels to traverse
-        
+        conn: PostgreSQL database connection
+        chunk_id (str): Unique identifier of the starting chunk
+        max_depth (int, optional): Maximum number of parent levels to traverse.
+            Defaults to 3.
+            
     Returns:
-        list: List of parent chunks ordered from root to direct parent
+        list: List of parent chunks ordered from root to direct parent,
+            each containing:
+            - id (str): Chunk identifier
+            - content (dict): JSON content
+            - metadata (dict): Additional information
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> parents = get_parent_chunks('chunk123', max_depth=2)
+        >>> for p in parents:
+        ...     print(f"Parent {p['id']}: {p['content']}")
+        Parent root_chunk: {'type': 'root'}
+        Parent mid_chunk: {'type': 'section'}
+        
+    Note:
+        - Returns empty list if chunk has no parents
+        - Respects max_depth parameter
+        - Orders from most distant to closest parent
+        - Includes full content and metadata
+        - Stops at root node (no parent_id)
     """
     parents = []
     current_id = chunk_id
@@ -414,15 +761,38 @@ def get_parent_chunks(conn, chunk_id: str, max_depth: int = 3) -> List[Dict]:
 
 def get_child_chunks(conn, parent_id: str, max_depth: int = 2) -> List[Dict]:
     """
-    Retrieve child chunks up to a specified depth.
+    Retrieve child chunks up to a specified depth in the hierarchy.
+    
+    This function recursively traverses down the chunk hierarchy, collecting
+    all descendant chunks until it reaches the specified maximum depth. The
+    results are ordered by level and depth.
     
     Args:
-        conn: Database connection
-        parent_id: ID of the parent chunk
-        max_depth: Maximum depth to traverse
-        
+        conn: PostgreSQL database connection
+        parent_id (str): Unique identifier of the parent chunk
+        max_depth (int, optional): Maximum depth to traverse. Defaults to 2.
+            
     Returns:
-        list: List of child chunks
+        list: List of child chunks ordered by level and depth, each containing:
+            - id (str): Chunk identifier
+            - content (dict): JSON content
+            - metadata (dict): Additional information
+            - depth (int): Nesting level from parent
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> children = get_child_chunks('parent123', max_depth=2)
+        >>> for child in children:
+        ...     print(f"Child at depth {child['depth']}: {child['id']}")
+        Child at depth 1: chunk456
+        Child at depth 2: chunk789
+        
+    Note:
+        - Uses recursive CTE for efficient traversal
+        - Returns empty list if no children found
+        - Orders by level (breadth) then depth
+        - Includes full content and metadata
+        - Respects max_depth parameter
     """
     cur = conn.cursor()
     cur.execute("""
@@ -454,16 +824,45 @@ def get_child_chunks(conn, parent_id: str, max_depth: int = 2) -> List[Dict]:
 
 def get_chunk_with_context(conn, chunk_id: str, max_parent_depth: int = 3, max_child_depth: int = 2) -> Dict:
     """
-    Retrieve a chunk with its hierarchical context.
+    Retrieve a chunk with its complete hierarchical context.
+    
+    This function provides a comprehensive view of a chunk within its document
+    hierarchy, including its own data, parent context, and child chunks. It
+    combines upward and downward traversal to build a complete picture.
     
     Args:
-        conn: Database connection
-        chunk_id: ID of the chunk to retrieve
-        max_parent_depth: Maximum number of parent levels to include
-        max_child_depth: Maximum number of child levels to include
-        
+        conn: PostgreSQL database connection
+        chunk_id (str): Unique identifier of the chunk
+        max_parent_depth (int, optional): Maximum levels to traverse upward.
+            Defaults to 3.
+        max_child_depth (int, optional): Maximum levels to traverse downward.
+            Defaults to 2.
+            
     Returns:
-        dict: Chunk data with parent and child context
+        dict or None: Complete chunk context if found, containing:
+            - id (str): Chunk identifier
+            - content (dict): JSON content
+            - metadata (dict): Additional information
+            - depth (int): Nesting level in document
+            - path (str): JSON path to chunk
+            - parents (list): Parent chunks from root
+            - children (list): Child chunks by level
+            Returns None if chunk not found
+            
+    Example:
+        >>> conn = psycopg2.connect(DATABASE_URL)
+        >>> context = get_chunk_with_context('chunk123')
+        >>> if context:
+        ...     print(f"Chunk: {context['id']}")
+        ...     print(f"Parents: {len(context['parents'])}")
+        ...     print(f"Children: {len(context['children'])}")
+        
+    Note:
+        - Returns None if chunk doesn't exist
+        - Includes complete hierarchical context
+        - Parents ordered from root to direct parent
+        - Children ordered by level and depth
+        - Efficient recursive queries for traversal
     """
     # Get the main chunk
     cur = conn.cursor()

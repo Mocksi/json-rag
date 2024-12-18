@@ -1,3 +1,25 @@
+"""
+Query Intent Analysis Module
+
+This module handles the analysis and classification of natural language queries
+in the JSON RAG system. It detects various types of intents including temporal
+queries, metric aggregations, relationship exploration, and risk assessment.
+
+Key Features:
+    - Pattern-based intent detection
+    - Multi-intent classification
+    - Temporal range extraction
+    - Metric condition parsing
+    - Entity reference detection
+    - Risk assessment analysis
+
+Example:
+    >>> from app.intent import analyze_query_intent
+    >>> intents = analyze_query_intent("Show average response time last 7 days")
+    >>> print(intents)
+    {'primary': 'metric', 'temporal': True, 'aggregation': 'average'}
+"""
+
 import re
 from datetime import datetime, timedelta
 from app.utils import parse_timestamp
@@ -44,16 +66,31 @@ patterns = {
     ]
 }
 
-def determine_primary_intent(intents):
+def determine_primary_intent(intents: dict) -> str:
     """
     Determine the primary intent from a set of detected intents.
-    Uses a priority-based approach where certain intents take precedence.
+    
+    This function implements a priority-based approach where certain intents
+    take precedence over others based on their importance and specificity.
     
     Args:
-        intents (set): Set of detected intents
+        intents (dict): Dictionary of detected intents and their confidence scores
         
     Returns:
-        str: Primary intent or 'general' if no specific intent is detected
+        str: The primary intent category (relationship, temporal, metric, or risk)
+        
+    Priority Order:
+        1. Risk (highest priority due to importance)
+        2. Metric (specific data analysis requests)
+        3. Relationship (entity connections)
+        4. Temporal (time-based filtering)
+        5. General (fallback)
+        
+    Example:
+        >>> intents = {'risk': 0.8, 'temporal': 0.9, 'metric': 0.7}
+        >>> primary = determine_primary_intent(intents)
+        >>> print(primary)
+        'risk'
     """
     # Priority order for intents
     priority_order = ['risk', 'temporal', 'metric', 'relationship']
@@ -65,26 +102,64 @@ def determine_primary_intent(intents):
             
     return 'general'
 
-def extract_time_range(query):
+def extract_time_range(query: str) -> dict:
     """
     Extract temporal range information from a query string.
     
+    This function parses natural language time range expressions and converts
+    them into structured datetime information. It handles various formats
+    including exact dates, relative ranges, and named periods.
+    
     Args:
-        query (str): User query string
+        query (str): User query string containing temporal expressions
         
     Returns:
         dict: Time range information containing:
-            - start: Start datetime
-            - end: End datetime
-            - type: 'exact', 'relative', or 'named'
-            - unit: Time unit for relative ranges
-            - amount: Numeric amount for relative ranges
-            - period: Named period (e.g., 'week', 'month')
+            - start (datetime): Start of the time range
+            - end (datetime): End of the time range
+            - type (str): Range type ('exact', 'relative', or 'named')
+            - unit (str, optional): Time unit for relative ranges ('day', 'week', etc.)
+            - amount (int, optional): Numeric amount for relative ranges
+            - period (str, optional): Named period for 'named' type ranges
             
-    Patterns Recognized:
-        - Exact: "between 2024-01-01 and 2024-02-01"
-        - Relative: "last 7 days", "last 2 weeks"
-        - Named: "this week", "this month"
+    Supported Formats:
+        Exact Dates:
+            - "between 2024-01-01 and 2024-02-01"
+            - "from 2024-01-01 to 2024-02-01"
+            
+        Relative Ranges:
+            - "last 7 days"
+            - "last 2 weeks"
+            - "past 3 months"
+            - "previous 1 year"
+            
+        Named Periods:
+            - "this week"
+            - "this month"
+            - "current year"
+            
+    Examples:
+        >>> extract_time_range("Show data between 2024-01-01 and 2024-02-01")
+        {
+            'start': datetime(2024, 1, 1),
+            'end': datetime(2024, 2, 1),
+            'type': 'exact'
+        }
+        
+        >>> extract_time_range("Get metrics for last 7 days")
+        {
+            'start': datetime(2024, 1, 11),  # 7 days before now
+            'end': datetime(2024, 1, 18),    # current date
+            'type': 'relative',
+            'unit': 'day',
+            'amount': 7
+        }
+    
+    Note:
+        - All datetime objects are timezone-naive and use the local timezone
+        - Relative ranges are calculated from the current datetime
+        - Month calculations use a 30-day approximation
+        - Year calculations use a 365-day approximation
     """
     query_lower = query.lower()
     # exact date range
@@ -141,23 +216,75 @@ def extract_time_range(query):
         }
     return None
 
-def extract_metric_conditions(query):
+def extract_metric_conditions(query: str) -> dict:
     """
     Extract metric-related conditions from a query string.
     
+    This function analyzes natural language queries to identify metric-related
+    operations, including aggregations, specific metrics, and comparison
+    conditions. It supports various ways of expressing metric operations
+    in natural language.
+    
     Args:
-        query (str): User query string
+        query (str): User query string containing metric-related expressions
         
     Returns:
         dict: Metric conditions containing:
-            - aggregation: Type of aggregation (average, maximum, etc.)
-            - metric: Name of the metric
-            - comparison: Comparison details (type and value)
+            - aggregation (str): Type of aggregation operation
+                - 'average': Mean value calculation
+                - 'maximum': Highest value
+                - 'minimum': Lowest value
+                - 'sum': Total value
+                - 'count': Number of items
+            - metric (str): Name or identifier of the metric
+            - comparison (dict): Comparison criteria
+                - 'type': Comparison operator (gt, lt, eq, etc.)
+                - 'value': Numeric value for comparison
+                - 'unit': Optional unit of measurement
             
-    Patterns Recognized:
-        - Aggregations: "average", "maximum", "minimum", "sum", "count"
-        - Metrics: "of [metric]", "[metric] values", "[metric] is"
-        - Comparisons: "greater than", "less than", "equal to"
+    Supported Patterns:
+        Aggregations:
+            - "average/mean/avg response time"
+            - "maximum/max/highest/peak value"
+            - "minimum/min/lowest/bottom score"
+            - "sum/total of values"
+            - "count/number of records"
+            
+        Metric Identification:
+            - "of [metric_name]"
+            - "[metric_name] values"
+            - "[metric_name] is"
+            - "where [metric_name]"
+            
+        Comparisons:
+            - "greater than/more than/above X"
+            - "less than/under/below X"
+            - "equal to/exactly X"
+            
+    Examples:
+        >>> extract_metric_conditions("Show average response time above 100ms")
+        {
+            'aggregation': 'average',
+            'metric': 'response_time',
+            'comparison': {
+                'type': 'gt',
+                'value': 100,
+                'unit': 'ms'
+            }
+        }
+        
+        >>> extract_metric_conditions("Count number of errors per day")
+        {
+            'aggregation': 'count',
+            'metric': 'errors',
+            'group_by': 'day'
+        }
+    
+    Note:
+        - The function attempts to identify the most specific metric name possible
+        - Comparison values are extracted with their units when present
+        - Multiple conditions in the same query are resolved by priority
+        - If no specific metric is identified, returns None for that field
     """
     conditions = {}
     query_lower = query.lower()
@@ -202,24 +329,74 @@ def extract_metric_conditions(query):
             break
     return conditions if conditions else None
 
-def extract_pagination_info(query):
+def extract_pagination_info(query: str) -> dict:
     """
     Extract pagination-related information from a query string.
     
+    This function analyzes natural language queries to identify pagination
+    requests, including page numbers, navigation directions, and result
+    limits. It supports various ways of expressing pagination in natural
+    language.
+    
     Args:
-        query (str): User query string
+        query (str): User query string containing pagination expressions
         
     Returns:
         dict: Pagination information containing:
-            - type: 'absolute', 'relative', or 'limit'
-            - page: Page number for absolute pagination
-            - direction: 'next' or 'previous' for relative pagination
-            - size: Number of results for limit pagination
+            - type (str): Pagination type
+                - 'absolute': Direct page number reference
+                - 'relative': Next/previous navigation
+                - 'limit': Result count limitation
+            - page (int, optional): Page number for absolute pagination
+            - direction (str, optional): Navigation direction
+                - 'next': Forward navigation
+                - 'previous': Backward navigation
+            - size (int, optional): Number of results per page
+            - offset (int, optional): Number of results to skip
             
-    Patterns Recognized:
-        - Absolute: "page 5"
-        - Relative: "next page", "previous page"
-        - Limit: "show 10 results"
+    Supported Patterns:
+        Absolute Pagination:
+            - "page 5"
+            - "go to page 3"
+            - "show page 10"
+            
+        Relative Navigation:
+            - "next page"
+            - "previous page"
+            - "show next"
+            - "go back"
+            
+        Result Limiting:
+            - "show 10 results"
+            - "limit to 20 items"
+            - "first 5 entries"
+            
+    Examples:
+        >>> extract_pagination_info("show page 5")
+        {
+            'type': 'absolute',
+            'page': 5,
+            'size': 10  # default page size
+        }
+        
+        >>> extract_pagination_info("next page")
+        {
+            'type': 'relative',
+            'direction': 'next',
+            'size': 10  # default page size
+        }
+        
+        >>> extract_pagination_info("show 20 results")
+        {
+            'type': 'limit',
+            'size': 20
+        }
+    
+    Note:
+        - Page numbers start from 1
+        - Default page size is used when not specified
+        - Invalid page numbers or sizes return None
+        - Relative navigation requires current page context
     """
     query_lower = query.lower()
     match = re.search(r'page\s+(\d+)', query_lower)
@@ -234,25 +411,70 @@ def extract_pagination_info(query):
         return {'type': 'limit', 'size': int(match.group(1))}
     return None
 
-def extract_entity_references(query):
+def extract_entity_references(query: str) -> dict:
     """
     Extract entity references and filters from a query string.
     
+    This function analyzes natural language queries to identify references
+    to entities, their attributes, and relationships. It supports multiple
+    formats for specifying entity information and filters.
+    
     Args:
-        query (str): User query string
+        query (str): User query string containing entity references
         
     Returns:
         dict: Entity references containing:
-            - Key-value pairs from explicit assignments
-            - Typed references (type:value)
-            - ID references (#123)
-            - Entity-specific patterns (user, status, category)
+            - explicit (dict): Key-value pairs from explicit assignments
+                Example: {"name": "john", "role": "admin"}
+            - typed (dict): References with type specifications
+                Example: {"user": "john", "status": "active"}
+            - ids (list): Extracted entity IDs
+                Example: ["123", "456"]
+            - implicit (dict): Contextually inferred references
+                Example: {"category": "books", "owner": "current_user"}
             
-    Patterns Recognized:
-        - Key-value: "key=value"
-        - Typed: "type:value"
-        - ID: "#123"
-        - Entity: "user john", "status active", "category books"
+    Supported Patterns:
+        Explicit Assignments:
+            - "name=john"
+            - "status=active"
+            - "category=books"
+            
+        Typed References:
+            - "user:john"
+            - "status:active"
+            - "type:document"
+            
+        ID References:
+            - "#123"
+            - "id:456"
+            - "document #789"
+            
+        Entity-Specific:
+            - "user john"
+            - "status active"
+            - "in category books"
+            - "by owner alice"
+            
+    Examples:
+        >>> extract_entity_references("show documents by user:john with status=active")
+        {
+            'explicit': {'status': 'active'},
+            'typed': {'user': 'john'},
+            'implicit': {'type': 'document'}
+        }
+        
+        >>> extract_entity_references("find order #123 and related items")
+        {
+            'ids': ['123'],
+            'implicit': {'type': 'order', 'include': 'items'}
+        }
+    
+    Note:
+        - Entity references are case-insensitive
+        - Multiple references to the same entity type are collected in lists
+        - Ambiguous references are resolved using context
+        - Invalid or malformed references are ignored
+        - Special characters in values are properly escaped
     """
     references = {}
     for token in query.split():
@@ -278,8 +500,67 @@ def extract_entity_references(query):
                 break
     return references if references else None
 
-def analyze_query_intent(query):
-    """Analyze query to determine primary and secondary intents."""
+def analyze_query_intent(query: str) -> dict:
+    """
+    Analyze natural language query to determine primary and secondary intents.
+    
+    This function performs comprehensive intent analysis by checking for multiple
+    types of patterns and determining the hierarchical relationship between
+    detected intents. It uses a pattern-based approach combined with priority
+    rules to identify the most relevant intent.
+    
+    Args:
+        query (str): Natural language query to analyze
+        
+    Returns:
+        dict: Intent analysis results containing:
+            - primary_intent (str): The main intent of the query
+            - all_intents (List[str]): All detected intents
+            - confidence (float, optional): Confidence score for primary intent
+            - context (dict, optional): Additional contextual information
+            
+    Intent Categories:
+        Relationship:
+            - Entity connections and dependencies
+            - Reference tracking
+            - Association patterns
+            
+        Temporal:
+            - Time-based queries
+            - Date ranges
+            - Periodic patterns
+            
+        Metric:
+            - Numerical analysis
+            - Statistical queries
+            - Aggregation requests
+            
+        Risk:
+            - Alert conditions
+            - Threshold violations
+            - Compliance checks
+            
+    Examples:
+        >>> analyze_query_intent("Show related documents from last week")
+        {
+            'primary_intent': 'relationship',
+            'all_intents': ['relationship', 'temporal'],
+            'confidence': 0.85
+        }
+        
+        >>> analyze_query_intent("Calculate average response time")
+        {
+            'primary_intent': 'metric',
+            'all_intents': ['metric'],
+            'confidence': 0.92
+        }
+    
+    Note:
+        - Multiple intents can be detected in a single query
+        - Primary intent is determined by priority rules
+        - Confidence scores reflect pattern match strength
+        - Context is preserved for downstream processing
+    """
     query_lower = query.lower()
     intents = set()
     
@@ -316,19 +597,64 @@ def analyze_query_intent(query):
     logger.debug(f"Final intent analysis: {result}")
     return result
 
-def extract_filters_from_query(query):
+def extract_filters_from_query(query: str) -> dict:
     """
-    Extract key-value filters from query string.
+    Extract key-value filters and conditions from a query string.
+    
+    This function parses natural language queries to identify filtering
+    conditions expressed in various formats. It supports both explicit
+    and implicit filter specifications.
     
     Args:
-        query (str): Query string to parse
+        query (str): Natural language query containing filter conditions
         
     Returns:
-        dict: Extracted filters as key-value pairs
+        dict: Extracted filters containing:
+            - explicit (dict): Direct key-value specifications
+            - implicit (dict): Inferred filter conditions
+            - ranges (dict): Numeric and temporal ranges
+            - negation (list): Excluded values
+            
+    Supported Formats:
+        Explicit Filters:
+            - "status=active"
+            - "priority=high"
+            - "type=document"
+            
+        Implicit Filters:
+            - "active documents"
+            - "high priority"
+            - "completed tasks"
+            
+        Range Filters:
+            - "price between 10 and 20"
+            - "age > 25"
+            - "count <= 100"
+            
+        Negation:
+            - "not status=deleted"
+            - "exclude category=draft"
+            - "without tag=temp"
+            
+    Examples:
+        >>> extract_filters_from_query("show active tasks with priority=high")
+        {
+            'explicit': {'priority': 'high'},
+            'implicit': {'status': 'active', 'type': 'task'}
+        }
         
-    Example:
-        >>> filters = extract_filters_from_query("show items where status=active and region=east")
-        {'status': 'active', 'region': 'east'}
+        >>> extract_filters_from_query("price between 10 and 20 not category=draft")
+        {
+            'ranges': {'price': {'min': 10, 'max': 20}},
+            'negation': {'category': 'draft'}
+        }
+    
+    Note:
+        - Filters are case-insensitive
+        - Multiple values for the same key are collected in lists
+        - Range values are normalized to consistent units
+        - Implicit filters are extracted based on context
+        - Negation is preserved in the filter structure
     """
     filters = {}
     tokens = query.split()

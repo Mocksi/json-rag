@@ -1,3 +1,22 @@
+"""
+Embedding Generation Module
+
+This module handles the generation and manipulation of vector embeddings for text chunks.
+It provides archetype-aware embedding generation and vector similarity search functionality
+using the Sentence Transformers library.
+
+The module uses the all-MiniLM-L6-v2 model which provides a good balance between:
+- Performance (384-dimensional embeddings)
+- Quality (state-of-the-art semantic similarity)
+- Speed (efficient inference)
+
+Key Features:
+    - Archetype-aware text preprocessing
+    - Vector similarity search with filtering
+    - Batch embedding generation
+    - Entity-specific embedding optimization
+"""
+
 from typing import List, Dict, Optional
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -7,7 +26,36 @@ import json
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def get_embedding(text: str, archetype: Optional[Dict] = None) -> np.ndarray:
-    """Get embedding vector for text, with archetype-specific preprocessing."""
+    """
+    Generate embedding vector for text with optional archetype-specific preprocessing.
+    
+    This function applies specialized preprocessing based on the content archetype
+    before generating embeddings. This improves semantic search for specific types
+    of content like entities, events, or metrics.
+    
+    Args:
+        text (str): Text to generate embedding for
+        archetype (Optional[Dict]): Content archetype information containing:
+            - type: The archetype type (entity_definition, event, metric)
+            - Additional archetype-specific parameters
+            
+    Returns:
+        np.ndarray: 384-dimensional embedding vector
+        
+    Examples:
+        >>> # Basic embedding
+        >>> vec = get_embedding("some text")
+        
+        >>> # Entity-aware embedding
+        >>> vec = get_embedding(json.dumps({"id": "123", "name": "Example"}),
+        ...                    {"type": "entity_definition"})
+    
+    Note:
+        Preprocessing strategies:
+        - entity_definition: Emphasizes identifier fields
+        - event: Prioritizes temporal and state information
+        - metric: Highlights numerical values and measurements
+    """
     if not archetype:
         return model.encode(text)
         
@@ -42,28 +90,30 @@ def get_embedding(text: str, archetype: Optional[Dict] = None) -> np.ndarray:
         
     return model.encode(processed_text)
 
-def vector_search_with_filter(conn, query, allowed_chunk_ids, top_k):
+def vector_search_with_filter(conn, query: str, allowed_chunk_ids: List[str], top_k: int = 5) -> List[Dict]:
     """
     Perform vector similarity search with optional ID filtering.
     
+    This function combines vector similarity search with ID-based filtering,
+    allowing for efficient retrieval of semantically similar chunks from a
+    subset of the database.
+    
     Args:
         conn: PostgreSQL database connection
-        query (str): Query string to embed and search
-        allowed_chunk_ids (list): List of chunk IDs to filter results
-        top_k (int): Maximum number of results to return
+        query (str): Search query text
+        allowed_chunk_ids (List[str]): List of chunk IDs to search within
+        top_k (int, optional): Maximum number of results to return. Defaults to 5.
         
     Returns:
-        list: Retrieved chunks ordered by relevance score
-        
-    Process:
-        1. Generates embedding for query text
-        2. Performs cosine similarity search in database
-        3. Optionally filters by allowed chunk IDs
-        4. Returns top_k most similar chunks
-        
+        List[Dict]: List of matching chunks, each containing:
+            - id: Chunk identifier
+            - content: Chunk content
+            - score: Similarity score
+            - metadata: Additional chunk information
+            
     Note:
-        Uses PGVector for efficient similarity search
-        Includes debug output for query processing
+        The function uses the pgvector extension for efficient
+        similarity search in the PostgreSQL database.
     """
     print(f"\nDEBUG: Filtered search for query: '{query}'")
     print(f"DEBUG: Filtering on {len(allowed_chunk_ids) if allowed_chunk_ids else 0} chunk IDs")

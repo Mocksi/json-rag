@@ -1,6 +1,17 @@
 """
 Smart Archetype Detection module for identifying JSON data patterns.
 Analyzes structure and content to classify JSON documents into common patterns.
+
+This module provides intelligent pattern detection for JSON data structures,
+helping to identify common data archetypes and their relationships. It uses
+a combination of structural analysis, field naming patterns, and content
+type detection to classify JSON documents.
+
+Key Features:
+    - Pattern Detection: Identifies common JSON data structures
+    - Relationship Analysis: Maps connections between data elements
+    - Content Classification: Categorizes data based on usage patterns
+    - Confidence Scoring: Provides certainty levels for detected patterns
 """
 
 from datetime import datetime
@@ -14,15 +25,61 @@ logger = get_logger(__name__)
 
 class ArchetypeDetector:
     """
-    Detects common JSON data patterns and structures.
+    Detects and classifies JSON data patterns and archetypes.
+    
+    This class analyzes JSON data structures to identify common patterns
+    and archetypes, helping to understand the semantic purpose and
+    relationships within the data.
     
     Patterns Detected:
-    - Event Logs: Timestamped entries with actions/states
-    - API Responses: Standard REST patterns with metadata
-    - Metric Data: Numerical time series or measurements
-    - Entity Collections: Lists of business objects
-    - State Machines: Objects with status transitions
-    - Configuration: Setting key-value pairs
+        Event Logs:
+            - Timestamped entries
+            - Action/state changes
+            - Sequential records
+            
+        API Responses:
+            - Status codes
+            - Response metadata
+            - Error handling
+            
+        Metric Data:
+            - Numerical measurements
+            - Time series data
+            - Statistical aggregates
+            
+        Entity Collections:
+            - Business objects
+            - Record sets
+            - Data hierarchies
+            
+        State Machines:
+            - Status transitions
+            - State history
+            - Validation rules
+            
+        Configuration:
+            - Setting definitions
+            - Feature flags
+            - System preferences
+            
+    Attributes:
+        patterns (defaultdict): Tracks detected pattern frequencies
+        field_frequencies (defaultdict): Counts field occurrences
+        type_frequencies (defaultdict): Tracks data type usage
+        value_patterns (defaultdict): Records value pattern sets
+        temporal_fields (set): Tracks time-related fields
+        numerical_fields (set): Tracks number-related fields
+        
+    Example:
+        >>> detector = ArchetypeDetector()
+        >>> data = {
+        ...     "timestamp": "2024-01-18T10:30:00",
+        ...     "event": "user_login",
+        ...     "user_id": "123"
+        ... }
+        >>> archetypes = detector.detect_archetypes(data)
+        >>> print(archetypes)
+        [('event_log', 0.9), ('entity_reference', 0.4)]
     """
     
     def __init__(self):
@@ -106,7 +163,35 @@ class ArchetypeDetector:
         }
     
     def _detect_record_pattern(self) -> Dict:
-        """Detect record patterns - objects representing distinct entities."""
+        """
+        Detect record patterns in JSON data representing distinct entities.
+        
+        This method analyzes field names and value patterns to identify
+        structures that represent distinct business entities or records.
+        
+        Detection Criteria:
+            - Identity Fields: 'id', 'uuid'
+            - Descriptive Fields: 'name', 'type', 'code'
+            - Metadata Fields: 'properties', 'attributes'
+            - Value Stability: Consistent values across instances
+            
+        Confidence Scoring:
+            - Base: Proportion of indicator fields present
+            - Boost: 2.0x for identity + description fields
+            - Boost: 1.5x for identity + stable values
+            - Penalty: 0.25x for single indicator
+            
+        Returns:
+            Dict: Detection results containing:
+                - confidence (float): Detection confidence score
+                - common_fields (list): Found indicator fields
+                - pattern (str): Pattern identifier
+                - usage (str): Pattern usage description
+                
+        Note:
+            High confidence requires multiple corroborating indicators.
+            Single field matches result in significantly reduced confidence.
+        """
         record_indicators = {
             'id', 'uuid', 'name', 'type', 'code', 'key',
             'properties', 'attributes', 'metadata'
@@ -141,7 +226,34 @@ class ArchetypeDetector:
         }
     
     def _detect_event_pattern(self) -> Dict:
-        """Detect event patterns - time-based occurrences."""
+        """
+        Detect event patterns in JSON data representing time-based occurrences.
+        
+        This method identifies structures that represent events, actions,
+        or state changes that occur at specific points in time.
+        
+        Detection Criteria:
+            - Temporal Fields: 'timestamp', 'time', 'date'
+            - Action Fields: 'status', 'state', 'action'
+            - Event Types: 'type', 'category'
+            - Lifecycle Fields: 'created_at', 'updated_at'
+            
+        Confidence Scoring:
+            - Base: Proportion of indicator fields present
+            - Boost: 2.0x for temporal + status fields
+            - Boost: 1.5x for temporal fields only
+            
+        Returns:
+            Dict: Detection results containing:
+                - confidence (float): Detection confidence score
+                - common_fields (list): Found indicator fields
+                - pattern (str): Pattern identifier
+                - usage (str): Pattern usage description
+                
+        Note:
+            Temporal fields are critical for event pattern detection.
+            Status/state fields provide additional confirmation.
+        """
         event_indicators = {
             'timestamp', 'time', 'date', 'created_at', 'updated_at',
             'occurred_at', 'status', 'state', 'type', 'action',
@@ -170,7 +282,34 @@ class ArchetypeDetector:
         }
     
     def _detect_collection_pattern(self) -> Dict:
-        """Detect collection patterns - lists of similar items."""
+        """
+        Detect collection patterns in JSON data representing groups of items.
+        
+        This method identifies structures that represent collections or
+        lists of related items, typically with similar structures.
+        
+        Detection Criteria:
+            - Array Fields: Fields containing lists
+            - Plural Names: Field names ending in 's'
+            - Consistent Structure: Similar items in arrays
+            - Collection Terms: 'items', 'list', 'collection'
+            
+        Confidence Scoring:
+            - Base: Number of array fields (max 1.0)
+            - Boost: Plural field names
+            - Boost: Consistent array item structure
+            
+        Returns:
+            Dict: Detection results containing:
+                - confidence (float): Detection confidence score
+                - common_fields (list): Found array fields
+                - pattern (str): Pattern identifier
+                - usage (str): Pattern usage description
+                
+        Note:
+            Arrays must contain multiple items for high confidence.
+            Single-item arrays receive reduced confidence scores.
+        """
         # Look for array structures and plural names
         array_fields = set()
         for type_info, count in self.type_frequencies.items():
@@ -192,7 +331,34 @@ class ArchetypeDetector:
         }
     
     def _detect_reference_pattern(self) -> Dict:
-        """Detect reference patterns - objects that link to others."""
+        """
+        Detect reference patterns in JSON data linking to other objects.
+        
+        This method identifies structures that represent relationships or
+        references between different objects in the data model.
+        
+        Detection Criteria:
+            - ID References: Fields ending in '_id'
+            - References: Fields ending in '_ref'
+            - Foreign Keys: Fields matching known ID patterns
+            - Link Fields: Fields containing reference metadata
+            
+        Confidence Scoring:
+            - Base: Number of reference fields (max 1.0)
+            - Boost: Multiple references to same entity type
+            - Boost: Presence of reference metadata
+            
+        Returns:
+            Dict: Detection results containing:
+                - confidence (float): Detection confidence score
+                - common_fields (list): Found reference fields
+                - pattern (str): Pattern identifier
+                - usage (str): Pattern usage description
+                
+        Note:
+            Reference fields should follow consistent naming patterns.
+            Confidence increases with multiple related references.
+        """
         # Look for fields that reference other objects
         reference_indicators = [f for f in self.field_frequencies.keys() 
                               if f.endswith('_id') or f.endswith('_ref')]
@@ -204,7 +370,34 @@ class ArchetypeDetector:
         }
     
     def _detect_metric_pattern(self) -> Dict:
-        """Detect metric patterns - numerical measurements."""
+        """
+        Detect metric patterns in JSON data containing measurements.
+        
+        This method identifies structures that represent numerical
+        measurements, statistics, or quantitative data points.
+        
+        Detection Criteria:
+            - Numerical Fields: Integer or float values
+            - Metric Names: 'value', 'amount', 'count'
+            - Units: Fields containing measurement units
+            - Aggregations: 'total', 'average', 'sum'
+            
+        Confidence Scoring:
+            - Base: Proportion of metric indicators present
+            - Boost: 2.0x for numbers + quantity fields
+            - Boost: 1.5x for numerical fields only
+            
+        Returns:
+            Dict: Detection results containing:
+                - confidence (float): Detection confidence score
+                - common_fields (list): Found metric fields
+                - pattern (str): Pattern identifier
+                - usage (str): Pattern usage description
+                
+        Note:
+            High confidence requires both numerical values and context.
+            Pure numbers without context receive reduced confidence.
+        """
         metric_indicators = {
             'value', 'amount', 'count', 'total', 'quantity',
             'rate', 'percentage', 'score', 'ratio', 'stock',
@@ -233,7 +426,34 @@ class ArchetypeDetector:
         }
     
     def _detect_state_pattern(self) -> Dict:
-        """Detect state patterns - current status/configuration."""
+        """
+        Detect state patterns in JSON data representing configurations.
+        
+        This method identifies structures that represent system states,
+        configurations, or settings that control behavior.
+        
+        Detection Criteria:
+            - State Fields: 'status', 'state', 'mode'
+            - Config Fields: 'enabled', 'active', 'config'
+            - Settings: 'preferences', 'options'
+            - Flags: Boolean or enumerated values
+            
+        Confidence Scoring:
+            - Base: Proportion of state indicators present
+            - Boost: Multiple related state fields
+            - Boost: Presence of validation rules
+            
+        Returns:
+            Dict: Detection results containing:
+                - confidence (float): Detection confidence score
+                - common_fields (list): Found state fields
+                - pattern (str): Pattern identifier
+                - usage (str): Pattern usage description
+                
+        Note:
+            State patterns often include validation constraints.
+            Configuration data typically has limited value ranges.
+        """
         state_indicators = {
             'status', 'state', 'enabled', 'active', 'config',
             'settings', 'preferences', 'mode', 'flags'
@@ -247,7 +467,34 @@ class ArchetypeDetector:
         }
     
     def _detect_document_pattern(self) -> Dict:
-        """Detect document patterns - nested, hierarchical content."""
+        """
+        Detect document patterns in JSON data with hierarchical content.
+        
+        This method identifies structures that represent document-like
+        content with nested sections and hierarchical organization.
+        
+        Detection Criteria:
+            - Content Fields: 'content', 'body', 'text'
+            - Structure: 'sections', 'elements', 'blocks'
+            - Metadata: 'title', 'description', 'details'
+            - Nesting: Deep hierarchical organization
+            
+        Confidence Scoring:
+            - Base: Proportion of document indicators
+            - Boost: Deep nesting (>2 levels)
+            - Boost: Multiple content sections
+            
+        Returns:
+            Dict: Detection results containing:
+                - confidence (float): Detection confidence score
+                - common_fields (list): Found document fields
+                - pattern (str): Pattern identifier
+                - usage (str): Pattern usage description
+                
+        Note:
+            Document patterns typically have deeper nesting.
+            Content organization is hierarchical by nature.
+        """
         # Look for deep nesting and content-related fields
         doc_indicators = {
             'content', 'data', 'body', 'text', 'description',
@@ -264,7 +511,29 @@ class ArchetypeDetector:
         }
     
     def _find_array_patterns(self) -> Set[str]:
-        """Find fields that contain arrays of similar items."""
+        """
+        Find fields containing arrays of similar items.
+        
+        This method analyzes the type frequencies to identify fields that
+        contain arrays (lists) with multiple items, indicating potential
+        collections or repeated structures.
+        
+        Detection Process:
+            1. Examine type frequency data
+            2. Identify fields with list type
+            3. Filter for fields with multiple occurrences
+            4. Collect field names in a set
+            
+        Returns:
+            Set[str]: Set of field names that contain arrays with:
+                - Multiple items
+                - Consistent structure
+                - Similar content types
+                
+        Note:
+            Only includes arrays with more than one item.
+            Single-item arrays are excluded to avoid false positives.
+        """
         array_fields = set()
         for type_info, count in self.type_frequencies.items():
             field, type_name = type_info.split(':')
@@ -273,7 +542,29 @@ class ArchetypeDetector:
         return array_fields
     
     def _calculate_max_nesting(self) -> int:
-        """Calculate the maximum nesting depth in the data."""
+        """
+        Calculate the maximum nesting depth in the data structure.
+        
+        This method analyzes field paths to determine the deepest level
+        of nesting in the JSON structure, which helps identify complex
+        hierarchical patterns.
+        
+        Calculation Process:
+            1. Examine each field path
+            2. Count dot separators in path
+            3. Track maximum depth seen
+            4. Return highest depth found
+            
+        Returns:
+            int: Maximum nesting depth, where:
+                0 = Flat structure (no nesting)
+                1 = Single level of nesting
+                2+ = Multiple levels of nesting
+                
+        Note:
+            Depth calculation uses dot notation in paths.
+            Array indices are treated as additional nesting levels.
+        """
         max_depth = 0
         for path in self.field_frequencies.keys():
             depth = path.count('.')
@@ -284,15 +575,54 @@ class ArchetypeDetector:
         """
         Perform detailed structural analysis of a JSON object.
         
+        This method conducts a comprehensive analysis of a JSON object's
+        structure, examining nesting patterns, value types, and field
+        naming conventions.
+        
+        Analysis Components:
+            Depth Analysis:
+                - Maximum nesting depth
+                - Path complexity
+                - Structural patterns
+                
+            Array Detection:
+                - Array locations
+                - Item consistency
+                - Collection patterns
+                
+            Value Analysis:
+                - Type distribution
+                - Value patterns
+                - Data characteristics
+                
+            Field Analysis:
+                - Naming patterns
+                - Field relationships
+                - Semantic groupings
+                
         Args:
-            json_obj: JSON object to analyze
+            json_obj (dict): JSON object to analyze
             
         Returns:
-            dict: Structural analysis including:
-                - depth: Maximum nesting depth
-                - array_paths: Paths containing arrays
-                - value_types: Distribution of value types
-                - field_patterns: Common field naming patterns
+            Dict: Analysis results containing:
+                - depth (int): Maximum nesting depth
+                - array_paths (List[str]): Paths to array fields
+                - value_types (Counter): Distribution of value types
+                - field_patterns (Counter): Common field patterns
+                
+        Example:
+            >>> analysis = analyze_structure({
+            ...     "users": [
+            ...         {"id": 1, "name": "Alice"},
+            ...         {"id": 2, "name": "Bob"}
+            ...     ]
+            ... })
+            >>> print(f"Max depth: {analysis['depth']}")
+            >>> print(f"Arrays found at: {analysis['array_paths']}")
+            
+        Note:
+            Analysis is recursive and handles nested structures.
+            Array indices are included in path calculations.
         """
         analysis = {
             'depth': 0,
@@ -373,7 +703,44 @@ class ArchetypeDetector:
         return detected_sorted  # Added return statement
 
     def _score_event_log(self, data: Dict) -> float:
-        """Score likelihood of being an event log entry."""
+        """
+        Score the likelihood that a JSON object represents an event log entry.
+        
+        This method evaluates how closely a JSON object matches the expected
+        pattern of an event log entry by checking for temporal, event-related,
+        and sequential indicators.
+        
+        Scoring Criteria:
+            Temporal (0.4):
+                - Timestamp field presence
+                - Valid timestamp format
+                - Standard date/time patterns
+                
+            Event Context (0.3):
+                - Event type/name
+                - Action description
+                - Status information
+                - Severity level
+                
+            Sequential (0.2):
+                - Order indicators
+                - Sequence numbers
+                - Index values
+                
+        Args:
+            data (Dict): JSON object to evaluate
+            
+        Returns:
+            float: Confidence score between 0.0 and 0.9, where:
+                0.0 = No event log characteristics
+                0.4 = Has timestamp only
+                0.7 = Has timestamp and event context
+                0.9 = Complete event log entry
+                
+        Note:
+            Timestamp is required for any non-zero score.
+            Additional context increases confidence.
+        """
         score = 0.0
         
         # Check for timestamp field
@@ -398,7 +765,48 @@ class ArchetypeDetector:
         return score if has_timestamp else 0.0
 
     def _score_metric_data(self, data: Dict) -> float:
-        """Score likelihood of being metric data."""
+        """
+        Score the likelihood that a JSON object represents metric data.
+        
+        This method evaluates how closely a JSON object matches the expected
+        pattern of metric data by checking for numerical values, metric-specific
+        fields, and measurement context.
+        
+        Scoring Criteria:
+            Numerical Content (0.3):
+                - Presence of numbers
+                - Proportion of numerical values
+                - Value ranges and precision
+                
+            Metric Context (0.3):
+                - Metric identifiers
+                - Measurement terms
+                - Aggregation indicators
+                
+            Time Series (0.2):
+                - Temporal markers
+                - Sequence indicators
+                - Period references
+                
+            Units (0.2):
+                - Unit specifications
+                - Scale indicators
+                - Dimension markers
+                
+        Args:
+            data (Dict): JSON object to evaluate
+            
+        Returns:
+            float: Confidence score between 0.0 and 1.0, where:
+                0.0 = No metric characteristics
+                0.3 = Has numerical values
+                0.6 = Has context and values
+                1.0 = Complete metric data
+                
+        Note:
+            Pure numbers without context get reduced scores.
+            Complete metric data requires multiple indicators.
+        """
         score = 0.0
         
         # Check for numerical values
@@ -425,7 +833,45 @@ class ArchetypeDetector:
         return score
 
     def _score_api_response(self, data: Dict) -> float:
-        """Score likelihood of being an API response."""
+        """
+        Score the likelihood that a JSON object represents an API response.
+        
+        This method evaluates how closely a JSON object matches the expected
+        pattern of an API response by checking for standard response fields,
+        status codes, and metadata.
+        
+        Scoring Criteria:
+            Response Fields (0.3):
+                - Status indicators
+                - Response codes
+                - Message content
+                - Error information
+                
+            HTTP Status (0.4):
+                - Standard HTTP codes
+                - Status ranges
+                - Response types
+                
+            Metadata (0.3):
+                - Headers
+                - Timestamps
+                - Version info
+                - API details
+                
+        Args:
+            data (Dict): JSON object to evaluate
+            
+        Returns:
+            float: Confidence score between 0.0 and 1.0, where:
+                0.0 = No API response characteristics
+                0.3 = Basic response fields
+                0.7 = Fields + status codes
+                1.0 = Complete API response
+                
+        Note:
+            Status codes strongly indicate API responses.
+            Metadata provides additional confirmation.
+        """
         score = 0.0
         
         # Check for common API response fields
@@ -449,7 +895,50 @@ class ArchetypeDetector:
         return score
 
     def _score_state_machine(self, data: Dict) -> float:
-        """Score likelihood of being a state machine entry."""
+        """
+        Score the likelihood that a JSON object represents a state machine.
+        
+        This method evaluates how closely a JSON object matches the expected
+        pattern of a state machine by checking for state transitions,
+        validation rules, and temporal markers.
+        
+        Scoring Criteria:
+            State Fields (0.4):
+                - Current state
+                - Status indicators
+                - State names
+                - Mode settings
+                
+            Transitions (0.3):
+                - State changes
+                - From/To states
+                - Actions
+                - Events
+                
+            Temporal (0.2):
+                - Timestamps
+                - Change history
+                - Transition times
+                
+            Rules (0.1):
+                - Validation rules
+                - Constraints
+                - Allowed states
+                
+        Args:
+            data (Dict): JSON object to evaluate
+            
+        Returns:
+            float: Confidence score between 0.0 and 1.0, where:
+                0.0 = No state machine characteristics
+                0.4 = Has state fields
+                0.7 = Has states and transitions
+                1.0 = Complete state machine
+                
+        Note:
+            State fields are primary indicators.
+            Transitions and rules provide confirmation.
+        """
         score = 0.0
         
         # Check for state-related fields
@@ -475,7 +964,52 @@ class ArchetypeDetector:
         return score
 
     def _score_entity_collection(self, data: Dict) -> float:
-        """Score likelihood of being an entity collection."""
+        """
+        Score the likelihood that a JSON object represents an entity collection.
+        
+        This method evaluates how closely a JSON object matches the expected
+        pattern of an entity collection by checking for identity fields,
+        relationships, and collection indicators.
+        
+        Scoring Criteria:
+            Identity (0.3):
+                - Unique identifiers
+                - Keys
+                - Names
+                - References
+                
+            Relationships (0.3):
+                - Parent/child links
+                - Ownership
+                - Group membership
+                - Related entities
+                
+            Metadata (0.2):
+                - Types
+                - Categories
+                - Classifications
+                - Attributes
+                
+            Collection (0.2):
+                - Item groups
+                - Entry lists
+                - Record sets
+                - Element arrays
+                
+        Args:
+            data (Dict): JSON object to evaluate
+            
+        Returns:
+            float: Confidence score between 0.0 and 1.0, where:
+                0.0 = No collection characteristics
+                0.3 = Has identifiers
+                0.6 = Has relationships
+                1.0 = Complete collection
+                
+        Note:
+            Identity fields are primary indicators.
+            Relationships and grouping provide confirmation.
+        """
         score = 0.0
         
         # Check for identity fields
@@ -500,84 +1034,51 @@ class ArchetypeDetector:
             
         return score
 
-    def get_matching_archetype(self, value: Dict, path: str) -> Dict:
-        """Get the best matching archetype for a specific value based on dataset patterns."""
-        best_match = None
-        highest_confidence = 0
-        
-        # Check value against known patterns
-        for archetype, details in self.dataset_archetypes.items():
-            if details['confidence'] > highest_confidence:
-                # Check if value matches this archetype's pattern
-                if self._matches_pattern(value, details['common_fields']):
-                    best_match = {
-                        'type': archetype,
-                        'confidence': details['confidence'],
-                        'pattern': details['pattern']
-                    }
-                    highest_confidence = details['confidence']
-        
-        return best_match
-    
-    def _matches_pattern(self, value: Dict, pattern_fields: List[str]) -> bool:
-        """Check if a value matches a pattern's expected fields."""
-        value_fields = set(value.keys())
-        return bool(value_fields & set(pattern_fields))
-
-    def _analyze_structure(self, data: Any, path: str = "") -> None:
-        """
-        Recursively analyze data structure, chunk it, and detect archetypes at each level.
-        
-        Args:
-            data: The data structure to analyze (dict, list, or primitive)
-            path: Current path in the JSON structure (default: "")
-            
-        Note:
-            - Updates field_frequencies for pattern detection
-            - Detects archetypes at each nested level
-            - Prints matching archetypes for each chunk
-        """
-        if isinstance(data, dict):
-            for key, value in data.items():
-                current_path = f"{path}.{key}" if path else key
-                self.field_frequencies[key] += 1
-                
-                # Detect archetypes for each sub-object
-                if isinstance(value, (dict, list)):
-                    self._analyze_structure(value, current_path)
-                else:
-                    logger.debug(f"Analyzing path: {current_path} -> {value}")
-                    archetypes = self.detect_archetypes({key: value})
-                    logger.debug(f"Detected archetypes at {current_path}: {archetypes}")
-        elif isinstance(data, list):
-            for index, item in enumerate(data):
-                current_path = f"{path}[{index}]"
-                self._analyze_structure(item, current_path)
-
-    def analyze_patterns(self, data: Dict) -> None:
-        """
-        Analyze patterns in a single JSON document.
-        
-        Args:
-            data: JSON object to analyze
-        """
-        # Analyze structure recursively
-        self._analyze_structure(data)
-        
-        # Update pattern frequencies
-        if self._detect_record_pattern()['confidence'] > 0.5:
-            self.patterns['record'] += 1
-        if self._detect_event_pattern()['confidence'] > 0.5:
-            self.patterns['event'] += 1
-        if self._detect_metric_pattern()['confidence'] > 0.5:
-            self.patterns['metric'] += 1
-        if self._detect_state_pattern()['confidence'] > 0.5:
-            self.patterns['state'] += 1
-        if self._detect_collection_pattern()['confidence'] > 0.5:
-            self.patterns['collection'] += 1
-
     def _score_transaction_pattern(self, data: Dict) -> float:
-        """Score likelihood of being a transaction pattern."""
+        """
+        Score the likelihood that a JSON object represents a transaction.
+        
+        This method evaluates how closely a JSON object matches the expected
+        pattern of a transaction by checking for transaction-specific fields,
+        amounts, and related metadata.
+        
+        Scoring Criteria:
+            Transaction Fields (0.4):
+                - Transaction IDs
+                - Order references
+                - Payment info
+                - Invoice details
+                
+            Financial Data (0.3):
+                - Amounts
+                - Prices
+                - Totals
+                - Quantities
+                
+            Status (0.2):
+                - Transaction state
+                - Payment status
+                - Processing stage
+                
+            Metadata (0.1):
+                - Timestamps
+                - References
+                - Categories
+                
+        Args:
+            data (Dict): JSON object to evaluate
+            
+        Returns:
+            float: Confidence score between 0.0 and 1.0, where:
+                0.0 = No transaction characteristics
+                0.4 = Has transaction fields
+                0.7 = Has financial data
+                1.0 = Complete transaction
+                
+        Note:
+            Transaction fields are primary indicators.
+            Financial data provides strong confirmation.
+        """
         score = 0.0
         
         # Check for transaction-related fields
@@ -601,6 +1102,182 @@ class ArchetypeDetector:
             score += 0.3
 
         return score
+
+    def get_matching_archetype(self, value: Dict, path: str) -> Dict:
+        """
+        Get the best matching archetype for a specific value based on dataset patterns.
+        
+        This method evaluates a JSON value against known dataset patterns to
+        determine its most likely archetype, considering both structural and
+        semantic characteristics.
+        
+        Matching Process:
+            1. Compare against known patterns
+            2. Calculate confidence scores
+            3. Select highest confidence match
+            4. Return archetype details
+            
+        Args:
+            value (Dict): JSON value to classify
+            path (str): Path to value in data structure
+            
+        Returns:
+            Dict: Best matching archetype containing:
+                - type (str): Archetype identifier
+                - confidence (float): Match confidence
+                - pattern (str): Pattern description
+                
+        Example:
+            >>> value = {"id": 123, "name": "Example"}
+            >>> path = "data.items[0]"
+            >>> match = get_matching_archetype(value, path)
+            >>> print(f"Found {match['type']} with {match['confidence']}")
+            
+        Note:
+            Returns None if no patterns match with sufficient confidence.
+            Path information helps with contextual matching.
+        """
+        best_match = None
+        highest_confidence = 0
+        
+        # Check value against known patterns
+        for archetype, details in self.dataset_archetypes.items():
+            if details['confidence'] > highest_confidence:
+                # Check if value matches this archetype's pattern
+                if self._matches_pattern(value, details['common_fields']):
+                    best_match = {
+                        'type': archetype,
+                        'confidence': details['confidence'],
+                        'pattern': details['pattern']
+                    }
+                    highest_confidence = details['confidence']
+        
+        return best_match
+    
+    def _matches_pattern(self, value: Dict, pattern_fields: List[str]) -> bool:
+        """
+        Check if a value matches a pattern's expected fields.
+        
+        This method determines if a JSON value matches a pattern by checking
+        for the presence of characteristic fields that define the pattern.
+        
+        Matching Process:
+            1. Extract value's field names
+            2. Compare with pattern fields
+            3. Check for field intersections
+            4. Determine match status
+            
+        Args:
+            value (Dict): JSON value to check
+            pattern_fields (List[str]): Expected fields for pattern
+            
+        Returns:
+            bool: True if value matches pattern, False otherwise
+            
+        Note:
+            Partial matches are considered valid.
+            Field order is not significant.
+        """
+        value_fields = set(value.keys())
+        return bool(value_fields & set(pattern_fields))
+
+    def _analyze_structure(self, data: Any, path: str = "") -> None:
+        """
+        Recursively analyze data structure, chunk it, and detect archetypes.
+        
+        This method performs a deep analysis of a JSON data structure,
+        identifying patterns and archetypes at each level of nesting.
+        
+        Analysis Process:
+            Structure Analysis:
+                - Field identification
+                - Type detection
+                - Nesting analysis
+                
+            Pattern Detection:
+                - Field frequencies
+                - Value patterns
+                - Structural patterns
+                
+            Archetype Detection:
+                - Pattern matching
+                - Confidence scoring
+                - Relationship mapping
+                
+        Args:
+            data (Any): Data structure to analyze
+            path (str): Current path in structure (default: "")
+            
+        Note:
+            Updates internal state (field_frequencies, etc.).
+            Logs detected archetypes for debugging.
+            Handles nested structures recursively.
+        """
+        if isinstance(data, dict):
+            for key, value in data.items():
+                current_path = f"{path}.{key}" if path else key
+                self.field_frequencies[key] += 1
+                
+                # Detect archetypes for each sub-object
+                if isinstance(value, (dict, list)):
+                    self._analyze_structure(value, current_path)
+                else:
+                    logger.debug(f"Analyzing path: {current_path} -> {value}")
+                    archetypes = self.detect_archetypes({key: value})
+                    logger.debug(f"Detected archetypes at {current_path}: {archetypes}")
+        elif isinstance(data, list):
+            for index, item in enumerate(data):
+                current_path = f"{path}[{index}]"
+                self._analyze_structure(item, current_path)
+
+    def analyze_patterns(self, data: Dict) -> None:
+        """
+        Analyze patterns in a single JSON document.
+        
+        This method performs a comprehensive pattern analysis on a JSON
+        document, identifying and tracking various structural and semantic
+        patterns.
+        
+        Analysis Steps:
+            1. Recursive Structure Analysis:
+                - Field relationships
+                - Value distributions
+                - Nesting patterns
+                
+            2. Pattern Detection:
+                - Record patterns
+                - Event patterns
+                - Metric patterns
+                - State patterns
+                - Collection patterns
+                
+            3. Pattern Frequency Updates:
+                - Track occurrences
+                - Update confidence scores
+                - Record relationships
+                
+        Args:
+            data (Dict): JSON document to analyze
+            
+        Note:
+            Updates internal pattern frequencies.
+            Confidence threshold of 0.5 for pattern recognition.
+            Patterns can overlap and coexist.
+        """
+        # Analyze structure recursively
+        self._analyze_structure(data)
+        
+        # Update pattern frequencies
+        if self._detect_record_pattern()['confidence'] > 0.5:
+            self.patterns['record'] += 1
+        if self._detect_event_pattern()['confidence'] > 0.5:
+            self.patterns['event'] += 1
+        if self._detect_metric_pattern()['confidence'] > 0.5:
+            self.patterns['metric'] += 1
+        if self._detect_state_pattern()['confidence'] > 0.5:
+            self.patterns['state'] += 1
+        if self._detect_collection_pattern()['confidence'] > 0.5:
+            self.patterns['collection'] += 1
 
     def detect_relationships(self, data: Dict, parent_key: Optional[str] = None) -> List[Dict]:
         """

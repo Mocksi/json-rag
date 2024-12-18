@@ -1,3 +1,25 @@
+"""
+JSON RAG Chat Module
+
+This module provides the core chat functionality for the JSON RAG system,
+handling data ingestion, embedding generation, and interactive querying.
+It manages the processing of JSON files, creation of embeddings, and
+maintains relationships between different chunks of data.
+
+Key Components:
+    - Data Ingestion: Processes and chunks JSON files
+    - Embedding Generation: Creates vector embeddings for chunks
+    - Relationship Detection: Maps connections between data chunks
+    - Interactive Chat: Handles user queries and generates responses
+    - Cache Management: Maintains efficient data access patterns
+
+The module integrates with various components including:
+    - Archetype detection for data pattern recognition
+    - Vector embeddings for semantic search
+    - PostgreSQL for persistent storage
+    - Relationship mapping for data connections
+"""
+
 from typing import List, Dict, Optional, Tuple
 import json
 from app.parsing import extract_key_value_pairs, json_to_path_chunks
@@ -26,7 +48,29 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 def serialize_for_debug(obj):
-    """Helper function to serialize objects for debug output."""
+    """
+    Serialize complex objects for debug output, handling special cases.
+    
+    This function provides a safe way to serialize objects that might contain
+    non-JSON serializable types (like numpy arrays) into a format suitable
+    for debug logging.
+    
+    Args:
+        obj: Object to serialize, can be of any type
+        
+    Returns:
+        Serialized version of the object with special types handled:
+            - numpy arrays -> Python lists
+            - dictionaries -> Recursively serialized dictionaries
+            - lists -> Recursively serialized lists
+            - Other types -> As is
+            
+    Example:
+        >>> data = {'array': np.array([1, 2, 3]), 'nested': {'value': 42}}
+        >>> serialized = serialize_for_debug(data)
+        >>> print(serialized)
+        {'array': [1, 2, 3], 'nested': {'value': 42}}
+    """
     if hasattr(obj, 'tolist'):  # Handle numpy arrays
         return obj.tolist()
     elif isinstance(obj, dict):
@@ -36,7 +80,54 @@ def serialize_for_debug(obj):
     return obj
 
 def load_and_embed_new_data(conn):
-    """Load and embed new or modified JSON files."""
+    """
+    Load and embed new or modified JSON files into the vector database.
+    
+    This function performs a multi-pass process to load, chunk, embed,
+    and index JSON files that have been added or modified since the last run.
+    It handles the complete pipeline from file processing to relationship
+    detection.
+    
+    Process Flow:
+        1. File Detection:
+            - Identifies new/modified JSON files
+            - Computes file hashes for change detection
+            
+        2. Chunking (First Pass):
+            - Processes each JSON file into chunks
+            - Generates metadata for each chunk
+            - Collects all chunks for batch processing
+            
+        3. Embedding Generation:
+            - Creates vector embeddings for all chunks
+            - Uses batch processing for efficiency
+            
+        4. Storage (Second Pass):
+            - Stores chunks in database
+            - Caches chunks for relationship detection
+            - Detects and stores archetypes
+            
+        5. Relationship Detection (Third Pass):
+            - Maps relationships between chunks
+            - Creates bidirectional references
+            - Stores relationship metadata
+            
+    Args:
+        conn: PostgreSQL database connection
+        
+    Returns:
+        bool: True if processing completed successfully
+        
+    Example:
+        >>> with psycopg2.connect(POSTGRES_CONN_STR) as conn:
+        ...     success = load_and_embed_new_data(conn)
+        >>> print("Processing complete" if success else "Processing failed")
+        
+    Note:
+        - Uses transaction to ensure data consistency
+        - Handles errors gracefully for individual files
+        - Maintains file metadata for incremental updates
+    """
     print("\nChecking for new data to embed...")
     
     # Get list of files that need processing
@@ -171,6 +262,37 @@ def load_and_embed_new_data(conn):
         
         # Helper function to extract all ID fields from a dict
         def extract_ids(obj, prefix=''):
+            """
+            Recursively extract ID fields from nested dictionaries and lists.
+            
+            This helper function traverses complex data structures to find and
+            collect ID fields, maintaining the full path context through prefixing.
+            It handles both direct ID fields and nested structures.
+            
+            Args:
+                obj: Object to extract IDs from (dict or list)
+                prefix: String prefix for nested field names (default: '')
+                
+            Returns:
+                dict: Mapping of ID field paths to their values, where:
+                    - Keys are the full path to the ID field
+                    - Values are the ID values found
+                    
+            Example:
+                >>> data = {
+                ...     'user': {
+                ...         'id': '123',
+                ...         'team': {'team_id': 'T456'}
+                ...     }
+                ... }
+                >>> extract_ids(data)
+                {'user_id': '123', 'user_team_team_id': 'T456'}
+                
+            Note:
+                - Handles both 'id' and '*_id' field patterns
+                - Maintains path context through nesting
+                - Processes both objects and arrays
+            """
             ids = {}
             if isinstance(obj, dict):
                 for k, v in obj.items():
@@ -237,25 +359,65 @@ def load_and_embed_new_data(conn):
 
 def initialize_embeddings(conn):
     """
-    Initializes embeddings for all JSON files in the data directory.
-    Called after database reset or when changes are detected.
+    Initialize vector embeddings for all JSON files in the data directory.
     
+    This function serves as the primary initialization point for the system's
+    vector embeddings. It's called either after a database reset or when
+    changes are detected in the JSON files.
+    
+    Process:
+        1. Scans the data directory for all JSON files
+        2. Processes each file through the embedding pipeline
+        3. Stores embeddings and metadata in the database
+        
     Args:
-        conn: PostgreSQL database connection
+        conn: PostgreSQL database connection object
+        
+    Example:
+        >>> with psycopg2.connect(POSTGRES_CONN_STR) as conn:
+        ...     initialize_embeddings(conn)
+        Initializing embeddings for all JSON files...
+        
+    Note:
+        - This is a potentially long-running operation for large datasets
+        - Progress is logged to provide visibility into the process
+        - Existing embeddings are preserved and only new/modified files are processed
     """
     print("Initializing embeddings for all JSON files...")
     load_and_embed_new_data(conn)
 
 def chat_loop(conn):
     """
-    Runs the main interactive chat loop, processing user queries and returning answers.
-    Automatically checks for and processes new/modified files before each query.
+    Run the main interactive chat loop for processing user queries.
     
+    This function implements the primary interaction point with users,
+    processing their queries and returning relevant answers based on
+    the embedded JSON data. It automatically checks for and processes
+    new or modified files before each query.
+    
+    Features:
+        - Interactive prompt for user queries
+        - Automatic data refresh before each query
+        - Error handling for query processing
+        - Special command support (:quit)
+        
     Args:
-        conn: PostgreSQL database connection
+        conn: PostgreSQL database connection object
         
     Commands:
         :quit - Exits the chat loop
+        
+    Example:
+        >>> with psycopg2.connect(POSTGRES_CONN_STR) as conn:
+        ...     chat_loop(conn)
+        Enter your queries below. Type ':quit' to exit.
+        You: Tell me about recent shipments
+        Assistant: Found 3 recent shipments...
+        
+    Note:
+        - The loop continues until explicitly terminated
+        - Each query triggers a check for new data
+        - Errors during query processing are caught and reported
     """
     print("Enter your queries below. Type ':quit' to exit.")
     while True:
@@ -273,7 +435,44 @@ def chat_loop(conn):
             print("Error processing query:", str(e))
 
 def build_prompt(query: str, context: List[str], query_intent: Dict) -> str:
-    """Build prompt with enhanced context formatting."""
+    """
+    Build a structured prompt for the language model with enhanced context formatting.
+    
+    This function constructs a detailed prompt that combines the user's query,
+    relevant context, and query intent information. The prompt is designed to
+    guide the language model toward providing accurate and contextual responses.
+    
+    Prompt Structure:
+        1. Base Instructions
+        2. Intent Information
+        3. Analysis Guidelines
+        4. Context Entries
+        5. User Query
+        6. Response Format Guidelines
+        
+    Args:
+        query: User's input query string
+        context: List of relevant context strings
+        query_intent: Dictionary containing:
+            - primary_intent: Main intent of the query
+            - all_intents: List of all detected intents
+            
+    Returns:
+        str: Formatted prompt string ready for the language model
+        
+    Example:
+        >>> context = ["Product ID: 123, Name: Widget", "Stock: 50 units"]
+        >>> intent = {
+        ...     "primary_intent": "inventory_query",
+        ...     "all_intents": ["inventory_query", "product_info"]
+        ... }
+        >>> prompt = build_prompt("How many widgets do we have?", context, intent)
+        
+    Note:
+        - Guidelines are dynamically adjusted based on query intent
+        - Context is formatted for clear separation
+        - Human-readable names are emphasized
+    """
     prompt = "Use the provided context to answer the user's query.\n\n"
     
     # Add intent-specific guidelines

@@ -1,4 +1,31 @@
 # relationships.py
+"""
+Relationship Detection and Analysis Module
+
+This module handles the detection, validation, and analysis of relationships between
+JSON document chunks in the RAG system. It provides functionality for both direct
+(explicit) and semantic (implicit) relationship detection between entities.
+
+Key Features:
+    - Relationship Validation: Validates relationships based on archetype patterns
+    - Similarity Computation: Calculates semantic similarity between entities
+    - Entity Registry: Maintains a registry of entities and their relationships
+    - Archetype-Aware: Considers data archetypes in relationship scoring
+    - Bidirectional Mapping: Tracks both direct and semantic relationships
+
+The module supports various relationship types:
+    - Reference: Direct references between entities (e.g., foreign keys)
+    - Contains: Hierarchical relationships
+    - Before/After: Temporal relationships
+    - Aggregates: Data aggregation relationships
+    - Semantic: Similarity-based relationships
+
+Usage:
+    >>> from app.relationships import detect_relationships
+    >>> relationships = detect_relationships(chunks, conn)
+    >>> print(f"Found {len(relationships['direct'])} direct relationships")
+"""
+
 from typing import List, Dict, Optional, Tuple
 import json
 from collections import defaultdict
@@ -14,7 +41,48 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 def validate_relationship(source_archetype: str, target_archetype: str, relationship_type: str) -> Tuple[bool, float]:
-    """Validate and score a relationship based on archetype patterns."""
+    """
+    Validate and score a relationship based on archetype patterns.
+    
+    This function determines whether a proposed relationship between two archetypes
+    is valid according to predefined rules and assigns a confidence score to the
+    relationship.
+    
+    Args:
+        source_archetype (str): Archetype of the source entity
+        target_archetype (str): Archetype of the target entity
+        relationship_type (str): Type of relationship to validate
+        
+    Returns:
+        Tuple[bool, float]: A tuple containing:
+            - bool: Whether the relationship is valid
+            - float: Confidence score (0.0 to 1.0) for the relationship
+            
+    Validation Rules:
+        entity_definition:
+            - Can reference other entities and metric data
+            - Can contain metric data and event logs
+            - Maximum traversal depth of 4
+            
+        event_log:
+            - Can have temporal relationships with other events
+            - Can trigger metric data updates
+            - Maximum traversal depth of 3
+            
+        metric_data:
+            - Can aggregate other metric data
+            - Can be derived from event logs
+            - Maximum traversal depth of 2
+            
+    Example:
+        >>> is_valid, score = validate_relationship(
+        ...     'entity_definition',
+        ...     'metric_data',
+        ...     'reference'
+        ... )
+        >>> print(f"Valid: {is_valid}, Score: {score}")
+        Valid: True, Score: 0.9
+    """
     # Safety check for None values
     if not source_archetype or not target_archetype:
         return True, 0.5
@@ -59,12 +127,33 @@ def compute_similarity(embedding1, embedding2) -> float:
     """
     Compute cosine similarity between two embeddings.
     
+    This function calculates the cosine similarity between two embedding vectors,
+    handling various input formats and edge cases. It's used primarily for
+    detecting semantic relationships between entities.
+    
     Args:
-        embedding1: First embedding vector
-        embedding2: Second embedding vector
+        embedding1: First embedding vector (numpy array or list)
+        embedding2: Second embedding vector (numpy array or list)
         
     Returns:
-        float: Cosine similarity score between 0 and 1
+        float: Cosine similarity score between 0 and 1, where:
+            1.0 = Identical embeddings
+            0.0 = Completely dissimilar or invalid embeddings
+            
+    Edge Cases:
+        - Returns 0.0 for None or empty embeddings
+        - Handles conversion from list to numpy array
+        - Protects against zero-norm vectors
+        
+    Example:
+        >>> v1 = [0.1, 0.2, 0.3]
+        >>> v2 = [0.2, 0.3, 0.4]
+        >>> similarity = compute_similarity(v1, v2)
+        >>> print(f"Similarity: {similarity:.2f}")
+        
+    Note:
+        The function uses numpy for efficient computation and
+        automatically handles type conversion and validation.
     """
     # Check for None or empty embeddings
     if embedding1 is None or embedding2 is None:
@@ -91,7 +180,54 @@ def compute_similarity(embedding1, embedding2) -> float:
     return float(dot_product / (norm1 * norm2))
 
 def detect_relationships(chunks, conn):
-    """Enhanced relationship detection with archetype validation."""
+    """
+    Enhanced relationship detection with archetype validation and semantic analysis.
+    
+    This function performs a comprehensive analysis of relationships between JSON
+    document chunks, detecting both direct (explicit) and semantic (implicit)
+    relationships. It uses a multi-pass approach to build an entity registry
+    and identify various types of relationships.
+    
+    Process Flow:
+        1. First Pass - Entity Registration:
+            - Extract key-value pairs from chunks
+            - Build entity registry with metadata
+            - Map entity IDs to chunk IDs
+            - Detect and validate direct relationships
+            
+        2. Second Pass - Semantic Analysis:
+            - Generate embeddings for entities
+            - Compute semantic similarities
+            - Identify related entities
+            - Score relationship confidence
+            
+    Args:
+        chunks: List of JSON document chunks to analyze
+        conn: Database connection for additional context lookup
+        
+    Returns:
+        dict: Comprehensive relationship analysis containing:
+            - direct: Dictionary of direct relationships by chunk ID
+            - semantic: Dictionary of semantic relationships by entity ID
+            - entity_registry: Registry of all detected entities
+            - chunk_id_map: Mapping between entity IDs and chunk IDs
+            
+    Example:
+        >>> chunks = [
+        ...     {"id": "1", "content": {"user_id": "U123", "name": "Alice"}},
+        ...     {"id": "2", "content": {"order_id": "O456", "user_id": "U123"}}
+        ... ]
+        >>> results = detect_relationships(chunks, conn)
+        >>> print(f"Direct relationships: {len(results['direct'])}")
+        >>> print(f"Semantic relationships: {len(results['semantic'])}")
+        
+    Note:
+        - Uses archetype detection for relationship validation
+        - Considers both structural and semantic relationships
+        - Maintains bidirectional relationship mapping
+        - Includes confidence scores for relationships
+        - Handles errors gracefully with logging
+    """
     # Initialize relationship tracking and detector
     detector = ArchetypeDetector()
     direct_relations = defaultdict(list)
