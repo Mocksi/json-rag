@@ -71,16 +71,37 @@ python -m app.main        # Normal operation
 ## Architecture
 ```
 app/
-    config.py          # Configuration settings
-    database.py        # PostgreSQL interaction
-    models.py          # Data validation
-    parsing.py         # JSON parsing
-    embedding.py       # Vector embeddings
-    retrieval.py       # Chunk retrieval
-    relationships.py   # Entity tracking
-    archetype.py       # Pattern detection
-    main.py           # Entry point
+├── analysis/           # Analysis and pattern detection
+│   ├── archetype.py   # Pattern and archetype detection
+│   ├── intent.py      # Query intent classification
+│   └── relationships.py# Entity relationship analysis
+├── core/              # Core system components
+│   └── config.py      # Configuration settings
+├── processing/        # Data processing modules
+│   ├── json_parser.py # JSON structure parsing
+│   ├── parsing.py     # Document parsing and chunking
+│   └── processor.py   # Data processing pipeline
+├── retrieval/         # Search and retrieval
+│   └── retrieval.py   # Vector search and chunk retrieval
+├── storage/           # Data persistence
+│   └── database.py    # PostgreSQL and vector storage
+├── utils/             # Utility modules
+│   └── json_utils.py  # Shared JSON processing utilities
+├── __init__.py        # Package initialization
+├── chat.py           # Chat interface and interactions
+└── main.py           # Application entry point
 ```
+
+The codebase is organized into logical modules:
+
+- **analysis/**: Modules for analyzing data patterns, relationships, and user intent
+- **core/**: Core system configuration and shared components
+- **processing/**: Data processing and transformation modules
+- **retrieval/**: Search and retrieval functionality
+- **storage/**: Database interaction and persistence
+- **utils/**: Shared utility functions and helpers
+
+Each module is designed to be independent with clear responsibilities, while working together through well-defined interfaces.
 
 ## Installation Requirements
 
