@@ -29,7 +29,7 @@ from collections import defaultdict
 from app.utils.utils import parse_timestamp, classify_path
 from app.core.models import FlexibleModel
 from app.core.config import MAX_CHUNKS
-from app.analysis.relationships import detect_relationships
+from app.analysis.relationships import process_relationships
 from app.utils.json_utils import extract_key_value_pairs
 from typing import Dict, List, Tuple
 
@@ -836,7 +836,7 @@ def process_json_document(json_obj: Dict, file_path: str = '', max_chunks: int =
     context, and metadata. It handles document analysis, chunking, entity
     extraction, and relationship tracking in a single unified process.
     
-    Processing Pipeline:
+    Process Flow:
         1. Document Analysis:
             - Structure analysis
             - Entity detection
@@ -882,35 +882,6 @@ def process_json_document(json_obj: Dict, file_path: str = '', max_chunks: int =
                 - target: Target chunk/entity identifier
                 - type: Relationship classification
                 - metadata: Relationship context
-                
-    Example:
-        >>> data = {
-        ...     "order": {
-        ...         "id": "ORD-123",
-        ...         "customer": {
-        ...             "id": "CUST-456",
-        ...             "name": "John Doe"
-        ...         },
-        ...         "items": [
-        ...             {
-        ...                 "product_id": "PROD-789",
-        ...                 "quantity": 2
-        ...             }
-        ...         ]
-        ...     }
-        ... }
-        >>> chunks, relationships = process_json_document(data)
-        >>> print(f"Generated {len(chunks)} chunks")
-        >>> print(f"Found {len(relationships)} relationships")
-        
-    Note:
-        - Handles complex document structures
-        - Preserves hierarchical relationships
-        - Maintains entity context
-        - Optimizes for searchability
-        - Supports large documents
-        - Provides rich metadata
-        - Enables relationship queries
     """
     # Step 1: Extract entities
     entities = extract_entities(json_obj)
@@ -919,7 +890,7 @@ def process_json_document(json_obj: Dict, file_path: str = '', max_chunks: int =
     chunks = json_to_path_chunks(json_obj, entities=entities)
     
     # Step 3: Detect relationships
-    relationships = detect_relationships(chunks)
+    relationships = process_relationships(chunks)
     
     return chunks, relationships
 

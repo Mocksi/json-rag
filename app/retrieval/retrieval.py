@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import re
 import statistics
 from openai import OpenAI
+import math
 
 from app.core.config import MAX_CHUNKS, embedding_model
 from app.utils.utils import parse_timestamp, get_json_files
@@ -24,177 +25,228 @@ client = OpenAI()
 # We'll place get_relevant_chunks and others here:
 
 def get_relevant_chunks(conn, query: str, top_k: int = 5) -> List[Dict]:
-    """Get relevant chunks with enriched context including multi-level relationships."""
-    cur = conn.cursor()
-    
-    # Get query archetype
-    detector = ArchetypeDetector()
-    query_archetype = detector.detect_archetypes({'query': query})
-    query_embedding = get_embedding(query, query_archetype)
-    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
-    
-    # Enhanced SQL query with archetype-aware relationship traversal and scoring
-    cur.execute("""
-        WITH RECURSIVE relationship_chain AS (
-            -- Base case: direct relationships
+    """Get relevant chunks with relationship-aware retrieval and entity enrichment."""
+    try:
+        cur = conn.cursor()
+        logger.debug("Created cursor successfully")
+        
+        # Get query embedding
+        query_embedding = get_embedding(query)
+        embedding_array = "[" + ",".join(f"{x:.10f}" for x in query_embedding) + "]"
+        
+        # Get the most relevant base chunks and their relationships
+        base_query = """
+        WITH base_chunks AS (
             SELECT 
-                source_chunk_id,
-                target_chunk_id,
-                relationship_type,
+                id,
+                chunk_json,
+                chunk_text,
                 metadata,
-                ARRAY[source_chunk_id]::varchar[] as path,
-                1 as depth,
-                -- Track archetype path
-                ARRAY[(
-                    SELECT archetype::varchar 
-                    FROM chunk_archetypes 
-                    WHERE chunk_id = source_chunk_id 
-                    ORDER BY confidence DESC 
-                    LIMIT 1
-                )]::varchar[] as archetype_path,
-                -- Add archetype-based scoring
-                CASE 
-                    WHEN EXISTS (
-                        SELECT 1 FROM chunk_archetypes 
-                        WHERE chunk_id = source_chunk_id 
-                        AND archetype = %s
-                    ) THEN 0.8
-                    ELSE 0.5
-                END as archetype_score
-            FROM chunk_relationships
-            
-            UNION ALL
-            
-            -- Recursive case
-            SELECT 
-                r.source_chunk_id,
-                r.target_chunk_id,
+                source_file,
+                embedding <=> %s::vector as distance
+            FROM json_chunks
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        ),
+        -- Get only the most relevant related chunks through relationships
+        related_chunks AS (
+            SELECT DISTINCT ON (c.id)
+                c.id,
+                c.chunk_json,
+                c.chunk_text,
+                c.metadata,
+                c.source_file,
                 r.relationship_type,
-                r.metadata,
-                (rc.path || r.target_chunk_id)::varchar[],
-                rc.depth + 1,
-                (rc.archetype_path || (
-                    SELECT archetype::varchar 
-                    FROM chunk_archetypes 
-                    WHERE chunk_id = r.target_chunk_id 
-                    ORDER BY confidence DESC 
-                    LIMIT 1
-                ))::varchar[],
-                rc.archetype_score * 0.9  -- Decay score with depth
-            FROM chunk_relationships r
-            JOIN relationship_chain rc ON r.source_chunk_id = rc.target_chunk_id
-            WHERE rc.depth < CASE 
-                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'entity_definition' THEN 4
-                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'event' THEN 3
-                WHEN rc.archetype_path[array_length(rc.archetype_path, 1)] = 'metric' THEN 2
-                ELSE 2
-            END
-            AND NOT r.target_chunk_id = ANY(rc.path)
+                r.confidence,
+                r.metadata as relationship_metadata,
+                c.embedding <=> %s::vector as rel_distance
+            FROM base_chunks b
+            JOIN chunk_relationships r ON (
+                b.id = r.source_chunk_id OR 
+                b.id = r.target_chunk_id
+            )
+            JOIN json_chunks c ON (
+                CASE 
+                    WHEN b.id = r.source_chunk_id THEN c.id = r.target_chunk_id
+                    ELSE c.id = r.source_chunk_id
+                END
+            )
+            WHERE r.confidence >= 0.8  -- Only high confidence relationships
+            ORDER BY c.id, r.confidence DESC, c.embedding <=> %s::vector
+            LIMIT 5  -- Limit related chunks per base chunk
+        ),
+        -- Get all fields from the chunks
+        chunk_fields AS (
+            SELECT 
+                chunks.id,
+                jsonb_object_agg(kv.key, kv.value) as fields
+            FROM (
+                SELECT id, chunk_json FROM base_chunks
+                UNION ALL
+                SELECT id, chunk_json FROM related_chunks
+            ) chunks
+            CROSS JOIN LATERAL jsonb_each_text(chunks.chunk_json) kv
+            GROUP BY chunks.id
+        ),
+        -- Combine all relevant data
+        combined_data AS (
+            SELECT 
+                b.id,
+                b.chunk_json,
+                b.chunk_text,
+                b.metadata,
+                b.source_file,
+                b.distance,
+                cf.fields,
+                jsonb_build_object(
+                    'related_chunks', (
+                        SELECT jsonb_agg(DISTINCT jsonb_build_object(
+                            'id', rc.id,
+                            'chunk', rc.chunk_json,
+                            'text', rc.chunk_text,
+                            'metadata', rc.metadata,
+                            'source_file', rc.source_file,
+                            'relationship_type', rc.relationship_type,
+                            'confidence', rc.confidence,
+                            'relationship_metadata', rc.relationship_metadata,
+                            'fields', rcf.fields
+                        ))
+                        FROM related_chunks rc
+                        LEFT JOIN chunk_fields rcf ON rc.id = rcf.id
+                        WHERE rc.rel_distance < 2.0  -- Only include closely related chunks
+                    )
+                ) as enriched_context
+            FROM base_chunks b
+            LEFT JOIN chunk_fields cf ON b.id = cf.id
         )
-        SELECT 
-            c.id,
-            c.chunk_json,
-            c.metadata,
-            (c.embedding <=> %s::vector) * COALESCE(MIN(rc.archetype_score), 1.0) as distance,
-            array_agg(DISTINCT jsonb_build_object(
-                'type', rc.relationship_type,
-                'target', rc.target_chunk_id,
-                'metadata', rc.metadata,
-                'archetype_path', rc.archetype_path
-            )) FILTER (WHERE rc.relationship_type IS NOT NULL) as relationships
-        FROM json_chunks c
-        LEFT JOIN relationship_chain rc ON c.id = rc.source_chunk_id
-        GROUP BY c.id, c.chunk_json, c.metadata, c.embedding
+        SELECT *
+        FROM combined_data
         ORDER BY distance ASC
-        LIMIT %s
-    """, (
-        query_archetype[0][0] if query_archetype else 'unknown',  # First archetype type
-        embedding_str,
-        top_k
-    ))
-    
-    results = cur.fetchall()
-    
-    # Format results with enriched context
-    enriched_chunks = []
-    for id, chunk_json, metadata, distance, relationships in results:
-        enriched_chunk = {
-            'id': id,
-            'content': chunk_json,
-            'relevance_score': 1 - distance,
-            'metadata': metadata,
-            'relationships': relationships if relationships else []
-        }
-        enriched_chunks.append(enriched_chunk)
-        logger.debug(f"Retrieved chunk {id} with {len(relationships) if relationships else 0} relationships")
-    
-    cur.close()
-    return enriched_chunks
+        LIMIT 3;  -- Further limit total chunks
+        """
+        
+        cur.execute(base_query, (embedding_array, embedding_array, top_k, embedding_array, embedding_array))
+        results = cur.fetchall()
+        
+        enriched_chunks = []
+        for row in results:
+            try:
+                chunk_id = row[0]
+                chunk_json = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+                chunk_text = row[2]
+                metadata = row[3] if isinstance(row[3], dict) else json.loads(row[3]) if row[3] else {}
+                source_file = row[4]
+                distance = row[5]
+                fields = row[6]
+                enriched_context = row[7]
+                
+                # Process related chunks
+                related_data = enriched_context.get('related_chunks', [])
+                relationships = []
+                for rel in related_data:
+                    if isinstance(rel, str):
+                        rel = json.loads(rel)
+                    
+                    relationships.append({
+                        'id': rel.get('id'),
+                        'content': rel.get('chunk'),
+                        'text': rel.get('text'),
+                        'metadata': rel.get('metadata'),
+                        'source_file': rel.get('source_file'),
+                        'type': rel.get('relationship_type'),
+                        'confidence': rel.get('confidence'),
+                        'relationship_metadata': rel.get('relationship_metadata'),
+                        'fields': rel.get('fields')
+                    })
+                
+                # Build final enriched chunk
+                enriched_chunk = {
+                    'id': chunk_id,
+                    'content': chunk_json,
+                    'text': chunk_text,
+                    'metadata': metadata,
+                    'source_file': source_file,
+                    'score': 1 - distance if distance is not None else 0,
+                    'fields': fields,
+                    'relationships': relationships[:2]  # Limit relationships per chunk
+                }
+                
+                enriched_chunks.append(enriched_chunk)
+                
+            except Exception as e:
+                logger.error(f"Error processing result row: {str(e)}")
+                logger.error(f"Row data: {row}")
+                continue
+        
+        cur.close()
+        return enriched_chunks
+        
+    except Exception as e:
+        logger.error(f"Error in get_relevant_chunks: {str(e)}")
+        if cur and not cur.closed:
+            cur.close()
+        raise
 
 def build_prompt(query, retrieved_chunks, query_intent):
-    """Build a prompt for the LLM using retrieved context and query intent."""
+    """Build a prompt for the LLM using retrieved context and relationships."""
     
-    # Format chunks based on content type
-    formatted_chunks = []
+    # Organize chunks by source file to maintain context
+    chunks_by_source = defaultdict(list)
+    
     for chunk in retrieved_chunks:
-        if isinstance(chunk, dict):
-            if chunk.get('type') == 'metric_aggregation':
-                # Format aggregated metrics
-                metrics = chunk.get('content', {})
-                formatted_chunks.append("Aggregated Metrics:")
-                for metric, stats in metrics.items():
-                    formatted_chunks.append(f"- {metric}:")
-                    for stat, value in stats.items():
-                        formatted_chunks.append(f"  {stat}: {value}")
-            
-            elif chunk.get('type') == 'relationship_graph':
-                # Format relationship data
-                relationships = chunk.get('content', {})
-                formatted_chunks.append("Entity Relationships:")
-                for entity_id, relations in relationships.items():
-                    formatted_chunks.append(f"- Entity {entity_id} connections:")
-                    for rel in relations:
-                        formatted_chunks.append(f"  {rel['type']} -> {rel['related_id']}")
-            
-            else:
-                # Format regular content
-                content = chunk.get('content')
-                if content:
-                    formatted_chunks.append(json.dumps(content, indent=2))
-        else:
-            formatted_chunks.append(str(chunk))
-
-    context_str = "\n\n".join(formatted_chunks)
+        source_file = chunk.get('source_file', 'unknown')
+        chunks_by_source[source_file].append(chunk)
     
-    # Build intent-specific guidelines
+    # Format context sections
+    context_sections = []
+    
+    # Add data by source file
+    for source_file, chunks in chunks_by_source.items():
+        source_name = source_file.split('/')[-1].replace('.json', '').title()
+        context_sections.append(f"\n### {source_name} Data ###")
+        
+        for chunk in chunks:
+            # Add main content
+            content = chunk.get('content', {})
+            if content:
+                context_sections.append(json.dumps(content, indent=2))
+            
+            # Add relationship information
+            for rel in chunk.get('relationships', []):
+                rel_type = rel.get('type', 'unknown')
+                confidence = rel.get('confidence', 0)
+                rel_content = rel.get('content', {})
+                
+                if confidence >= 0.8:  # Only include high-confidence relationships
+                    context_sections.append(f"\nRelated Data ({rel_type}, confidence: {confidence:.2f}):")
+                    if rel_content:
+                        context_sections.append(json.dumps(rel_content, indent=2))
+    
+    context_str = "\n\n".join(context_sections)
+    
+    # Build focused guidelines based on intent
     guidelines = [
         "- Use specific details from the context",
-        "- Always use human-readable names in addition to IDs",
-        "- If information isn't in the context, say so"
+        "- If information isn't in the context, say so",
+        "- Consider relationships between different pieces of data"
     ]
     
-    if 'temporal' in query_intent['all_intents']:
-        guidelines.extend([
-            "- Preserve chronological order",
-            "- Include specific dates and times when available"
-        ])
-        
-    if 'aggregation' in query_intent['all_intents']:
-        guidelines.extend([
-            "- Include relevant metrics and their values",
-            "- Highlight significant patterns or trends"
-        ])
-        
-    if 'entity' in query_intent['all_intents']:
-        guidelines.extend([
-            "- Show relationships between entities",
-            "- Include relevant entity attributes"
-        ])
+    # Add only the most relevant intent-specific guidelines
+    primary_intent = query_intent.get('primary_intent')
+    if primary_intent in ['temporal', 'aggregation', 'entity', 'risk']:
+        if primary_intent == 'temporal':
+            guidelines.append("- Include specific dates and times")
+        elif primary_intent == 'aggregation':
+            guidelines.append("- Include relevant metrics and values")
+        elif primary_intent == 'entity':
+            guidelines.append("- Show relationships between items")
+        elif primary_intent == 'risk':
+            guidelines.append("- Highlight potential alerts and warnings")
 
     prompt = f"""Use the provided context to answer the user's query.
 
-Query Intent: {query_intent['primary_intent']}
-Additional Intents: {', '.join(query_intent['all_intents'])}
+Query Intent: {primary_intent}
 
 Guidelines:
 {chr(10).join(guidelines)}
@@ -204,13 +256,8 @@ Context:
 
 Question: {query}
 
-Answer based only on the provided context, using human-readable names."""
+Answer based only on the provided context. Consider relationships between different pieces of data."""
 
-    logger.debug("DEBUG: Prompt sent to OpenAI:")
-    logger.debug("=" * 80)
-    logger.debug(prompt)
-    logger.debug("=" * 80)
-    
     return prompt
 
 def summarize_chunks(chunks):

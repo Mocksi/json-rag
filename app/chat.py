@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from app.processing.parsing import extract_key_value_pairs, json_to_path_chunks
 from app.retrieval.embedding import get_embedding
 from app.analysis.archetype import ArchetypeDetector
-from app.analysis.relationships import detect_relationships
+from app.analysis.relationships import process_relationships
 from app.storage.database import (
     get_files_to_process,
     upsert_file_metadata,
@@ -496,3 +496,98 @@ def build_prompt(query: str, context: List[str], query_intent: Dict) -> str:
     prompt += "Answer based only on the provided context, using human-readable names."
     
     return prompt
+
+def assemble_context(chunks: List[Dict], max_tokens: int = 3000) -> str:
+    """
+    Assemble context for the LLM, organizing chunks by their relationships.
+    
+    Args:
+        chunks: List of chunks with relationships
+        max_tokens: Maximum tokens to include
+        
+    Returns:
+        Formatted context string
+    """
+    def format_chunk(chunk: Dict, section: str) -> str:
+        content = chunk['content']
+        relationships = chunk.get('relationships', [])
+        
+        # Format the chunk content
+        chunk_text = f"\n### {section}\n"
+        chunk_text += json.dumps(content, indent=2)
+        
+        # Add relationship context if available
+        if relationships:
+            chunk_text += "\nRelationships:"
+            for rel in relationships:
+                rel_type = rel['type']
+                confidence = rel.get('confidence', 0.0)
+                if confidence >= 0.6:  # Only include high-confidence relationships
+                    chunk_text += f"\n- {rel_type.upper()}: {rel.get('metadata', {}).get('value', 'N/A')}"
+        
+        return chunk_text
+    
+    # Group chunks by their role
+    primary_chunks = []
+    supporting_chunks = []
+    context_chunks = []
+    
+    for chunk in chunks:
+        score = chunk.get('score', 0.0)
+        if score >= 0.8:
+            primary_chunks.append(chunk)
+        elif score >= 0.6:
+            supporting_chunks.append(chunk)
+        else:
+            context_chunks.append(chunk)
+    
+    # Assemble the context parts
+    context_parts = []
+    token_count = 0
+    
+    # Add primary information (60% of token budget)
+    primary_token_limit = int(max_tokens * 0.6)
+    for chunk in primary_chunks:
+        if token_count >= primary_token_limit:
+            break
+        context_parts.append(format_chunk(chunk, "Primary Information"))
+        token_count += len(context_parts[-1].split())
+    
+    # Add supporting information (30% of token budget)
+    supporting_token_limit = int(max_tokens * 0.3)
+    for chunk in supporting_chunks:
+        if token_count >= primary_token_limit + supporting_token_limit:
+            break
+        context_parts.append(format_chunk(chunk, "Supporting Information"))
+        token_count += len(context_parts[-1].split())
+    
+    # Add contextual information (10% of token budget)
+    for chunk in context_chunks:
+        if token_count >= max_tokens:
+            break
+        context_parts.append(format_chunk(chunk, "Additional Context"))
+        token_count += len(context_parts[-1].split())
+    
+    # Combine all parts
+    full_context = "\n\n".join(context_parts)
+    
+    # Add relationship summary at the end
+    relationship_summary = "\n### Relationship Summary\n"
+    relationship_types = {
+        'explicit': "Direct references between entities",
+        'semantic': "Contextually related information",
+        'temporal': "Time-based relationships"
+    }
+    
+    for rel_type, description in relationship_types.items():
+        rel_count = sum(
+            1 for chunk in chunks
+            for rel in chunk.get('relationships', [])
+            if rel['type'] == rel_type and rel.get('confidence', 0) >= 0.6
+        )
+        if rel_count > 0:
+            relationship_summary += f"- Found {rel_count} {rel_type} relationships ({description})\n"
+    
+    full_context += relationship_summary
+    
+    return full_context

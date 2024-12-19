@@ -1,42 +1,43 @@
 # JSON RAG Integration
 
-A tool for efficiently loading and integrating nested JSON data structures into RAG (Retrieval-Augmented Generation) systems, with enhanced entity tracking and context preservation.
+A tool for efficiently loading and integrating nested JSON data structures into RAG (Retrieval-Augmented Generation) systems, with enhanced entity tracking, relationship detection, and context preservation.
 
 ## Key Features
 
 * **Advanced Query Understanding**:
   - Temporal patterns (exact dates, relative ranges, named periods)
   - Metric aggregations (average, maximum, minimum, sum, count)
-  - Entity relationships (direct and semantic connections)
+  - Entity relationships (direct, semantic, and cross-file connections)
   - State transitions and system conditions
-  - Hybrid search combining vector similarity and filters
+  - Hybrid search combining vector similarity, relationships, and filters
 
 * **Smart Data Processing**:
   - Automatic entity detection and relationship mapping
+  - Cross-file relationship detection and validation
   - Key-value pair extraction for filtered searches
   - Embedded metadata tracking
   - Batch processing with change detection
 
 * **Archetype-Aware Processing**:
-  - Pattern detection (entities, events, metrics)
+  - Pattern detection (entities, events, metrics, collections)
   - Archetype-based scoring and ranking
-  - Relationship validation by type
+  - Relationship validation by archetype
   - Context-aware embedding generation
-  - Hierarchical traversal limits
+  - Archetype-specific traversal strategies
 
 * **Hierarchical Data Management**:
   - Full JSON structure preservation
   - Parent-child relationship tracking
-  - Depth-aware chunk generation
+  - Cross-file relationship mapping
   - Contextual embedding with ancestry
   - Path-based chunk identification
 
 * **Enhanced Retrieval**:
   - Vector similarity search using PGVector
-  - Hierarchical context assembly
+  - Relationship-aware context assembly
   - Entity-aware result filtering
-  - Relationship-based context expansion
-  - Confidence scoring and ranking
+  - Cross-file context expansion
+  - Confidence-based scoring and ranking
 
 
 ## Quick Start
@@ -74,7 +75,7 @@ app/
 ├── analysis/           # Analysis and pattern detection
 │   ├── archetype.py   # Pattern and archetype detection
 │   ├── intent.py      # Query intent classification
-│   └── relationships.py# Entity relationship analysis
+│   └── relationships.py# Cross-file relationship analysis
 ├── core/              # Core system components
 │   └── config.py      # Configuration settings
 ├── processing/        # Data processing modules
@@ -82,7 +83,7 @@ app/
 │   ├── parsing.py     # Document parsing and chunking
 │   └── processor.py   # Data processing pipeline
 ├── retrieval/         # Search and retrieval
-│   └── retrieval.py   # Vector search and chunk retrieval
+│   └── retrieval.py   # Relationship-aware retrieval
 ├── storage/           # Data persistence
 │   └── database.py    # PostgreSQL and vector storage
 ├── utils/             # Utility modules
@@ -94,11 +95,11 @@ app/
 
 The codebase is organized into logical modules:
 
-- **analysis/**: Modules for analyzing data patterns, relationships, and user intent
+- **analysis/**: Modules for analyzing data patterns, cross-file relationships, and user intent
 - **core/**: Core system configuration and shared components
-- **processing/**: Data processing and transformation modules
-- **retrieval/**: Search and retrieval functionality
-- **storage/**: Database interaction and persistence
+- **processing/**: Data processing and relationship detection modules
+- **retrieval/**: Relationship-aware search and context assembly
+- **storage/**: Database interaction and relationship persistence
 - **utils/**: Shared utility functions and helpers
 
 Each module is designed to be independent with clear responsibilities, while working together through well-defined interfaces.
@@ -136,13 +137,14 @@ MIT License - see LICENSE file for details.
 
 ## Roadmap
 
+- [x] Cross-file relationship detection
+- [x] Archetype-aware retrieval
+- [x] Relationship-based context expansion
+- [x] Confidence scoring algorithm refinement
 - [ ] State transition handling improvements
 - [ ] Batch processing optimization
-- [ ] Archetype scoring system enhancements
-- [ ] Relationship-based context expansion
 - [ ] Metric aggregation capabilities
-- [ ] Confidence scoring algorithm refinement
 - [ ] Entity filtering rules improvement
 - [ ] Context assembly performance optimization
-- [ ] Cross-file data integration and unified schema
+- [ ] Advanced archetype pattern detection
 
