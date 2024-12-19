@@ -35,7 +35,7 @@ from app.storage.database import (
     get_chunk_by_id
 )
 from app.utils.utils import get_json_files, compute_file_hash
-from app.retrieval.retrieval import answer_query
+from app.retrieval.retrieval import answer_query, QueryPipeline
 from app.core.models import FlexibleModel
 from app.core.config import MAX_CHUNKS, embedding_model
 from app.processing.json_parser import generate_chunk_id, normalize_json_path

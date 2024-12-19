@@ -1,0 +1,25 @@
+{
+    "date": "2024-03-18",
+    "interactions": [
+      {
+        "interaction_id": "INT8901",
+        "customer_id": "C789",
+        "timestamp": "2024-03-18T14:20:00Z",
+        "type": "product_review",
+        "product_id": "P1001",
+        "rating": 5,
+        "review_text": "Amazing noise cancellation, exactly what I was looking for!",
+        "verified_purchase": true
+      },
+      {
+        "interaction_id": "INT8902",
+        "customer_id": "C791",
+        "timestamp": "2024-03-18T15:45:00Z",
+        "type": "support_ticket",
+        "product_id": "P1002",
+        "ticket_status": "open",
+        "issue_category": "setup_help",
+        "description": "Need help connecting the coffee maker to my home WiFi"
+      }
+    ]
+  }

@@ -193,30 +193,36 @@ def detect_temporal_relationships(chunks: List[Dict]) -> List[Dict]:
     return relationships
 
 def process_relationships(chunks: List[Dict]) -> List[Dict]:
-    """
-    Process all types of relationships for a set of chunks.
-    
-    Args:
-        chunks: List of chunk dictionaries
+    """Process all relationships with proper error handling."""
+    try:
+        relationships = []
         
-    Returns:
-        List of all detected relationships
-    """
-    relationships = []
-    
-    # Detect explicit references
-    explicit = detect_explicit_references(chunks)
-    relationships.extend(explicit)
-    logger.debug(f"Found {len(explicit)} explicit references")
-    
-    # Detect semantic relationships
-    semantic = detect_semantic_relationships(chunks)
-    relationships.extend(semantic)
-    logger.debug(f"Found {len(semantic)} semantic relationships")
-    
-    # Detect temporal relationships
-    temporal = detect_temporal_relationships(chunks)
-    relationships.extend(temporal)
-    logger.debug(f"Found {len(temporal)} temporal relationships")
-    
-    return relationships
+        # Detect explicit references
+        try:
+            explicit = detect_explicit_references(chunks)
+            relationships.extend(explicit)
+            logger.debug(f"Found {len(explicit)} explicit references")
+        except Exception as e:
+            logger.error(f"Error detecting explicit references: {e}")
+        
+        # Detect semantic relationships
+        try:
+            semantic = detect_semantic_relationships(chunks)
+            relationships.extend(semantic)
+            logger.debug(f"Found {len(semantic)} semantic relationships")
+        except Exception as e:
+            logger.error(f"Error detecting semantic relationships: {e}")
+        
+        # Detect temporal relationships
+        try:
+            temporal = detect_temporal_relationships(chunks)
+            relationships.extend(temporal)
+            logger.debug(f"Found {len(temporal)} temporal relationships")
+        except Exception as e:
+            logger.error(f"Error detecting temporal relationships: {e}")
+        
+        return relationships
+        
+    except Exception as e:
+        logger.error(f"Error processing relationships: {e}")
+        return []

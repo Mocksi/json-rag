@@ -74,20 +74,21 @@ python -m app.main        # Normal operation
 app/
 ├── analysis/           # Analysis and pattern detection
 │   ├── archetype.py   # Pattern and archetype detection
-│   ├── intent.py      # Query intent classification
 │   └── relationships.py# Cross-file relationship analysis
 ├── core/              # Core system components
-│   └── config.py      # Configuration settings
+│   ├── config.py      # Configuration settings
+│   └── models.py      # Data models
 ├── processing/        # Data processing modules
 │   ├── json_parser.py # JSON structure parsing
 │   ├── parsing.py     # Document parsing and chunking
 │   └── processor.py   # Data processing pipeline
-├── retrieval/         # Search and retrieval
-│   └── retrieval.py   # Relationship-aware retrieval
+├── retrieval/         # Query processing and retrieval
+│   ├── embedding.py   # Vector embedding generation
+│   └── retrieval.py   # Query pipeline and execution
 ├── storage/           # Data persistence
 │   └── database.py    # PostgreSQL and vector storage
 ├── utils/             # Utility modules
-│   └── json_utils.py  # Shared JSON processing utilities
+│   └── logging_config.py # Logging configuration
 ├── __init__.py        # Package initialization
 ├── chat.py           # Chat interface and interactions
 └── main.py           # Application entry point
@@ -147,4 +148,25 @@ MIT License - see LICENSE file for details.
 - [ ] Entity filtering rules improvement
 - [ ] Context assembly performance optimization
 - [ ] Advanced archetype pattern detection
+
+## Query Pipeline
+
+The system implements a structured reasoning pipeline:
+
+1. **Query Analysis**: 
+   - Determines required data types
+   - Identifies needed operations (filtering, aggregation)
+   - Detects relationships and constraints
+
+2. **Plan Creation**:
+   - Builds retrieval strategy
+   - Plans processing operations
+   - Determines result formatting
+
+3. **Execution**:
+   - Retrieves relevant chunks
+   - Processes according to plan
+   - Assembles coherent response
+
+This systematic approach ensures consistent and reliable query handling while preserving context and relationships.
 

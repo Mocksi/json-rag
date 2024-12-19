@@ -451,94 +451,78 @@ def save_chunk_relationships(conn, relationships: List[Dict]) -> None:
     finally:
         cur.close()
 
-def get_chunk_archetypes(conn, chunk_id: str) -> List[Tuple[str, float]]:
-    """
-    Retrieve archetype classifications for a document chunk.
-    
-    This function fetches all detected archetypes and their confidence scores
-    for a given chunk. Results are ordered by confidence score in descending
-    order.
-    
-    Args:
-        conn: PostgreSQL database connection
-        chunk_id (str): Unique identifier of the chunk
-        
-    Returns:
-        list: Tuples of (archetype_name, confidence_score), where:
-            - archetype_name (str): Name of the detected pattern
-            - confidence_score (float): Confidence level (0.0 to 1.0)
-            
-    Example:
-        >>> conn = psycopg2.connect(DATABASE_URL)
-        >>> archetypes = get_chunk_archetypes(conn, 'chunk123')
-        >>> for archetype, confidence in archetypes:
-        ...     print(f"{archetype}: {confidence:.2f}")
-        event_log: 0.95
-        metric_data: 0.75
-        
-    Note:
-        - Returns empty list if no archetypes found
-        - Results are sorted by confidence (highest first)
-        - Confidence scores are normalized to [0.0, 1.0]
-    """
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT archetype, confidence 
-        FROM chunk_archetypes 
-        WHERE chunk_id = %s 
-        ORDER BY confidence DESC
-    """, (chunk_id,))
-    return cur.fetchall()
-
 def get_chunk_relationships(conn, chunk_id: str) -> List[Dict]:
-    """
-    Retrieve relationships for a specific document chunk.
-    
-    This function fetches all relationships where the specified chunk is
-    either the source or target. It returns both incoming and outgoing
-    relationships, providing a complete view of the chunk's connections.
-    
-    Args:
-        conn: PostgreSQL database connection
-        chunk_id (str): Unique identifier of the chunk
+    """Get relationships for a chunk."""
+    cur = None
+    try:
+        cur = conn.cursor()
         
-    Returns:
-        list: List of relationship dictionaries containing:
-            - source (str): ID of source chunk
-            - target (str): ID of target chunk
-            - type (str): Relationship type
-            - metadata (dict): Additional relationship data
+        query = """
+        SELECT 
+            r.source_chunk_id,
+            r.target_chunk_id,
+            r.relationship_type,
+            r.metadata,
+            s.chunk_json as source_data,
+            t.chunk_json as target_data
+        FROM chunk_relationships r
+        JOIN json_chunks s ON r.source_chunk_id = s.id
+        JOIN json_chunks t ON r.target_chunk_id = t.id
+        WHERE r.source_chunk_id = %s OR r.target_chunk_id = %s
+        """
+        
+        cur.execute(query, (chunk_id, chunk_id))
+        results = cur.fetchall()
+        
+        relationships = []
+        for row in results:
+            source_id, target_id, rel_type, metadata, source_data, target_data = row
+            relationships.append({
+                'source_id': source_id,
+                'target_id': target_id,
+                'type': rel_type,
+                'metadata': metadata,
+                'source_data': source_data,
+                'target_data': target_data
+            })
             
-    Example:
-        >>> conn = psycopg2.connect(DATABASE_URL)
-        >>> relationships = get_chunk_relationships('chunk123')
-        >>> for rel in relationships:
-        ...     print(f"{rel['type']}: {rel['source']} -> {rel['target']}")
-        reference: chunk123 -> chunk456
-        parent: chunk789 -> chunk123
+        return relationships
         
-    Note:
-        - Returns both incoming and outgoing relationships
-        - Returns empty list if no relationships found
-        - Metadata is parsed from JSONB to Python dict
-        - Relationship types are preserved as stored
-    """
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT source_chunk, target_chunk, relationship_type, metadata
-        FROM chunk_relationships
-        WHERE source_chunk = %s OR target_chunk = %s
-    """, (chunk_id, chunk_id))
-    
-    relationships = []
-    for row in cur.fetchall():
-        relationships.append({
-            'source': row[0],
-            'target': row[1],
-            'type': row[2],
-            'metadata': row[3]
-        })
-    return relationships
+    except Exception as e:
+        logger.error(f"Error getting relationships for chunk {chunk_id}: {e}")
+        if conn:
+            conn.rollback()
+        return []
+        
+    finally:
+        if cur and not cur.closed:
+            cur.close()
+
+def get_chunk_archetypes(conn, chunk_id: str) -> List[Tuple[str, float]]:
+    """Get archetypes for a chunk."""
+    cur = None
+    try:
+        cur = conn.cursor()
+        
+        query = """
+        SELECT 
+            archetype,
+            confidence
+        FROM chunk_archetypes
+        WHERE chunk_id = %s
+        ORDER BY confidence DESC
+        """
+        
+        cur.execute(query, (chunk_id,))
+        return cur.fetchall()
+        
+    except Exception as e:
+        logger.error(f"Error getting archetypes for chunk {chunk_id}: {e}")
+        return []
+        
+    finally:
+        if cur and not cur.closed:
+            cur.close()
 
 def get_chunk_by_id(conn, chunk_id: str) -> Optional[Dict]:
     """

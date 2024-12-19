@@ -655,52 +655,27 @@ class ArchetypeDetector:
         analyze_recursive(json_obj)
         return analysis
 
-    def detect_archetypes(self, data: Dict) -> List[Tuple[str, float]]:
-        """
-        Detect all matching archetypes for a JSON object and return sorted types and scores.
-        
-        Args:
-            data: JSON object to analyze.
+    def detect_archetypes(self, chunk: Dict) -> List[Tuple[str, float]]:
+        """Detect archetypes with proper error handling."""
+        try:
+            archetypes = []
+            content = chunk.get('content', {})
             
-        Returns:
-            list: Sorted list of (archetype, confidence_score) tuples.
+            # Check each archetype pattern
+            for pattern in self.patterns:
+                try:
+                    confidence = pattern.check(content)
+                    if confidence > 0:
+                        archetypes.append((pattern.name, confidence))
+                except Exception as e:
+                    logger.error(f"Error checking pattern {pattern.name}: {e}")
+                    continue
             
-        Example:
-            >>> detector = ArchetypeDetector()
-            >>> data = {
-            ...     "timestamp": "2024-03-16T10:30:00Z",
-            ...     "event": "user_login",
-            ...     "status": "success",
-            ...     "metrics": {"duration_ms": 150}
-            ... }
-            >>> archetypes = detector.detect_archetypes(data)
-            >>> for archetype, confidence in archetypes:
-            ...     print(f"Detected {archetype} with {confidence:.2f} confidence")
-            Detected event_log with 0.90 confidence
-            Detected metric_data with 0.45 confidence
-        """
-        logger.debug("detect_archetypes called with data:", data)  # Added debug print
-        
-        scores = {
-            'event_log': self._score_event_log(data),
-            'metric_data': self._score_metric_data(data),
-            'api_response': self._score_api_response(data),
-            'state_machine': self._score_state_machine(data),
-            'entity_collection': self._score_entity_collection(data),
-            'transaction_data': self._score_transaction_pattern(data)
-        }
-        
-        # Add debug print for raw scores
-        logger.debug(f"Raw scores: {scores}")
-        
-        # Only keep high-confidence matches
-        detected = [(atype, score) for atype, score in scores.items() if score > 0.2]
-        detected_sorted = sorted(detected, key=lambda x: x[1], reverse=True)
-        
-        # Add print statement to show detected archetypes
-        logger.debug(f"Detected archetypes: {detected_sorted} for data: {json.dumps(data, indent=2)}")
-        
-        return detected_sorted  # Added return statement
+            return sorted(archetypes, key=lambda x: x[1], reverse=True)
+            
+        except Exception as e:
+            logger.error(f"Error detecting archetypes: {e}")
+            return []
 
     def _score_event_log(self, data: Dict) -> float:
         """

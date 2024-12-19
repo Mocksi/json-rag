@@ -1,0 +1,41 @@
+{
+    "catalog_id": "CAT2024Q1",
+    "last_updated": "2024-03-18T10:00:00Z",
+    "products": [
+      {
+        "id": "P1001",
+        "name": "Wireless Noise-Cancelling Headphones",
+        "category": "Electronics",
+        "price": 299.99,
+        "inventory_status": "in_stock",
+        "stock_count": 145,
+        "variants": [
+          {
+            "color": "black",
+            "sku": "P1001-BLK",
+            "stock": 100
+          },
+          {
+            "color": "white",
+            "sku": "P1001-WHT",
+            "stock": 45
+          }
+        ]
+      },
+      {
+        "id": "P1002",
+        "name": "Smart Coffee Maker",
+        "category": "Home Appliances",
+        "price": 159.99,
+        "inventory_status": "low_stock",
+        "stock_count": 12,
+        "variants": [
+          {
+            "color": "silver",
+            "sku": "P1002-SLV",
+            "stock": 12
+          }
+        ]
+      }
+    ]
+  }

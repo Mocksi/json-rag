@@ -25,6 +25,7 @@ import re
 from datetime import datetime, timedelta
 from app.utils.utils import parse_timestamp
 from app.utils.logging_config import get_logger
+from typing import Optional, Dict
 # From your original code: extract_time_range, extract_metric_conditions, extract_pagination_info, extract_entity_references, analyze_query_intent
 
 logger = get_logger(__name__)
@@ -41,12 +42,20 @@ patterns = {
         r'relationship between'
     ],
     'temporal': [
+        r'(?:on\s+)?\d{4}-\d{2}-\d{2}',
+        r'before\s+\d{1,2}:\d{2}\s*(?:am|pm)?',
+        r'after\s+\d{1,2}:\d{2}\s*(?:am|pm)?',
+        r'between\s+\d{1,2}:\d{2}\s*(?:am|pm)?\s+and\s+\d{1,2}:\d{2}\s*(?:am|pm)?',
         r'between\s+\d{4}-\d{2}-\d{2}\s+and\s+\d{4}-\d{2}-\d{2}',
         r'last\s+\d+\s+(?:day|week|month|year)s?',
         r'this (?:week|month|year)',
         r'since\s+\d{4}-\d{2}-\d{2}',
         r'before\s+\d{4}-\d{2}-\d{2}',
-        r'after\s+\d{4}-\d{2}-\d{2}'
+        r'after\s+\d{4}-\d{2}-\d{2}',
+        r'on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)',
+        r'at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?',
+        r'from\s+\d{4}-\d{2}-\d{2}',
+        r'to\s+\d{4}-\d{2}-\d{2}'
     ],
     'metric': [
         r'average|mean|avg',
@@ -56,7 +65,8 @@ patterns = {
         r'count|number of|how many',
         r'greater than|more than|above',
         r'less than|under|below',
-        r'equal to|exactly'
+        r'equal to|exactly',
+        r'value|amount|cost'
     ],
     'risk': [
         r'risk|danger|hazard',
@@ -78,22 +88,13 @@ def determine_primary_intent(intents: dict) -> str:
         intents (dict): Dictionary of detected intents and their confidence scores
         
     Returns:
-        str: The primary intent category (relationship, temporal, metric, or risk)
-        
-    Priority Order:
-        1. Risk (highest priority due to importance)
-        2. Metric (specific data analysis requests)
-        3. Relationship (entity connections)
-        4. Temporal (time-based filtering)
-        5. General (fallback)
-        
-    Example:
-        >>> intents = {'risk': 0.8, 'temporal': 0.9, 'metric': 0.7}
-        >>> primary = determine_primary_intent(intents)
-        >>> print(primary)
-        'risk'
+        str: The primary intent category
     """
-    # Priority order for intents
+    # Check for combined temporal-metric queries
+    if 'temporal' in intents and 'metric' in intents:
+        return 'temporal_metric'
+    
+    # Priority order for single intents
     priority_order = ['risk', 'temporal', 'metric', 'relationship']
     
     # Return the first matching intent based on priority
@@ -103,119 +104,85 @@ def determine_primary_intent(intents: dict) -> str:
             
     return 'general'
 
-def extract_time_range(query: str) -> dict:
-    """
-    Extract temporal range information from a query string.
-    
-    This function parses natural language time range expressions and converts
-    them into structured datetime information. It handles various formats
-    including exact dates, relative ranges, and named periods.
-    
-    Args:
-        query (str): User query string containing temporal expressions
-        
-    Returns:
-        dict: Time range information containing:
-            - start (datetime): Start of the time range
-            - end (datetime): End of the time range
-            - type (str): Range type ('exact', 'relative', or 'named')
-            - unit (str, optional): Time unit for relative ranges ('day', 'week', etc.)
-            - amount (int, optional): Numeric amount for relative ranges
-            - period (str, optional): Named period for 'named' type ranges
-            
-    Supported Formats:
-        Exact Dates:
-            - "between 2024-01-01 and 2024-02-01"
-            - "from 2024-01-01 to 2024-02-01"
-            
-        Relative Ranges:
-            - "last 7 days"
-            - "last 2 weeks"
-            - "past 3 months"
-            - "previous 1 year"
-            
-        Named Periods:
-            - "this week"
-            - "this month"
-            - "current year"
-            
-    Examples:
-        >>> extract_time_range("Show data between 2024-01-01 and 2024-02-01")
-        {
-            'start': datetime(2024, 1, 1),
-            'end': datetime(2024, 2, 1),
-            'type': 'exact'
-        }
-        
-        >>> extract_time_range("Get metrics for last 7 days")
-        {
-            'start': datetime(2024, 1, 11),  # 7 days before now
-            'end': datetime(2024, 1, 18),    # current date
-            'type': 'relative',
-            'unit': 'day',
-            'amount': 7
-        }
-    
-    Note:
-        - All datetime objects are timezone-naive and use the local timezone
-        - Relative ranges are calculated from the current datetime
-        - Month calculations use a 30-day approximation
-        - Year calculations use a 365-day approximation
-    """
+def extract_time_range(query: str) -> Optional[Dict]:
+    """Extract temporal range information from a query string."""
     query_lower = query.lower()
-    # exact date range
-    match = re.search(r'between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})', query_lower)
-    if match:
-        return {
-            'start': parse_timestamp(match.group(1)),
-            'end': parse_timestamp(match.group(2)),
-            'type': 'exact'
-        }
-    # last X day/week etc.
-    match = re.search(r'last\s+(\d+)\s+(day|week|month|year)s?', query_lower)
-    if match:
-        amount = int(match.group(1))
-        unit = match.group(2)
-        end_date = datetime.now()
-        if unit == 'day':
-            delta = timedelta(days=amount)
-        elif unit == 'week':
-            delta = timedelta(weeks=amount)
-        elif unit == 'month':
-            delta = timedelta(days=amount * 30)
-        else:
-            delta = timedelta(days=amount * 365)
-        return {
-            'start': end_date - delta,
-            'end': end_date,
-            'type': 'relative',
-            'unit': unit,
-            'amount': amount
-        }
-    # "this week"/"this month"
-    if 'this week' in query_lower:
-        today = datetime.now()
-        start = today - timedelta(days=today.weekday())
-        return {
-            'start': start,
-            'end': start + timedelta(days=7),
-            'type': 'named',
-            'period': 'week'
-        }
-    elif 'this month' in query_lower:
-        today = datetime.now()
-        start = today.replace(day=1)
-        if today.month == 12:
-            end = today.replace(year=today.year+1, month=1, day=1)
-        else:
-            end = today.replace(month=today.month+1, day=1)
-        return {
-            'start': start,
-            'end': end,
-            'type': 'named',
-            'period': 'month'
-        }
-    return None
+    
+    # Add support for more natural language date formats
+    month_names = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12
+    }
+    
+    # First try to extract the date
+    date_match = None
+    extracted_date = None
+    
+    # Enhanced pattern for natural language dates
+    for month_name, month_num in month_names.items():
+        patterns = [
+            f"{month_name}\\s+(\\d{{1,2}})(?:st|nd|rd|th)?,?\\s*(\\d{{4}})?",  # March 18, 2024
+            f"{month_name}\\s+(\\d{{1,2}})(?:st|nd|rd|th)?",  # March 18
+            f"(\\d{{1,2}})(?:st|nd|rd|th)?\\s+{month_name}"   # 18 March
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                day = int(match.group(1))
+                year = int(match.group(2)) if len(match.groups()) > 1 and match.group(2) else datetime.now().year
+                
+                try:
+                    extracted_date = datetime(year, month_num, day)
+                    date_match = match
+                    break
+                except ValueError:
+                    continue
+        if extracted_date:
+            break
+    
+    if not extracted_date:
+        return None
+        
+    # Now look for time constraints
+    time_pattern = r"(before|after)\s+(\d{1,2}):?(\d{2})?\s*(am|pm|AM|PM)?"
+    time_match = re.search(time_pattern, query_lower)
+    
+    if time_match:
+        direction = time_match.group(1)  # 'before' or 'after'
+        hour = int(time_match.group(2))
+        minutes = int(time_match.group(3)) if time_match.group(3) else 0
+        meridiem = time_match.group(4)
+        
+        # Convert to 24-hour format if AM/PM specified
+        if meridiem:
+            if meridiem.lower() == 'pm' and hour != 12:
+                hour += 12
+            elif meridiem.lower() == 'am' and hour == 12:
+                hour = 0
+                
+        target_time = extracted_date.replace(hour=hour, minute=minutes)
+        
+        if direction == 'before':
+            return {
+                'start': extracted_date.replace(hour=0, minute=0, second=0, microsecond=0),
+                'end': target_time.replace(second=59, microsecond=999999),
+                'type': 'exact'
+            }
+        else:  # after
+            return {
+                'start': target_time,
+                'end': extracted_date.replace(hour=23, minute=59, second=59, microsecond=999999),
+                'type': 'exact'
+            }
+    
+    # If no time constraint, return full day range
+    return {
+        'start': extracted_date.replace(hour=0, minute=0, second=0, microsecond=0),
+        'end': extracted_date.replace(hour=23, minute=59, second=59, microsecond=999999),
+        'type': 'exact'
+    }
 
 def extract_metric_conditions(query: str) -> dict:
     """
@@ -502,76 +469,11 @@ def extract_entity_references(query: str) -> dict:
     return references if references else None
 
 def analyze_query_intent(query: str) -> dict:
-    """
-    Analyze natural language query to determine primary and secondary intents.
-    
-    This function performs comprehensive intent analysis by checking for multiple
-    types of patterns and determining the hierarchical relationship between
-    detected intents. It uses a pattern-based approach combined with priority
-    rules to identify the most relevant intent.
-    
-    Args:
-        query (str): Natural language query to analyze
-        
-    Returns:
-        dict: Intent analysis results containing:
-            - primary_intent (str): The main intent of the query
-            - all_intents (List[str]): All detected intents
-            - confidence (float, optional): Confidence score for primary intent
-            - context (dict, optional): Additional contextual information
-            
-    Intent Categories:
-        Relationship:
-            - Entity connections and dependencies
-            - Reference tracking
-            - Association patterns
-            
-        Temporal:
-            - Time-based queries
-            - Date ranges
-            - Periodic patterns
-            
-        Metric:
-            - Numerical analysis
-            - Statistical queries
-            - Aggregation requests
-            
-        Risk:
-            - Alert conditions
-            - Threshold violations
-            - Compliance checks
-            
-    Examples:
-        >>> analyze_query_intent("Show related documents from last week")
-        {
-            'primary_intent': 'relationship',
-            'all_intents': ['relationship', 'temporal'],
-            'confidence': 0.85
-        }
-        
-        >>> analyze_query_intent("Calculate average response time")
-        {
-            'primary_intent': 'metric',
-            'all_intents': ['metric'],
-            'confidence': 0.92
-        }
-    
-    Note:
-        - Multiple intents can be detected in a single query
-        - Primary intent is determined by priority rules
-        - Confidence scores reflect pattern match strength
-        - Context is preserved for downstream processing
-    """
+    """Analyze natural language query to determine primary and secondary intents."""
     query_lower = query.lower()
     intents = set()
     
-    # Check for relationship patterns
-    relationship_matches = [p for p in patterns['relationship'] if re.search(p, query_lower)]
-    if relationship_matches:
-        logger.debug(f"Relationship matches: {relationship_matches}")
-        intents.add('relationship')
-    
-    # Check for temporal patterns
+    # Check for temporal patterns first
     temporal_matches = [p for p in patterns['temporal'] if re.search(p, query_lower)]
     if temporal_matches:
         logger.debug(f"Temporal matches: {temporal_matches}")
@@ -583,11 +485,29 @@ def analyze_query_intent(query: str) -> dict:
         logger.debug(f"Metric matches: {metric_matches}")
         intents.add('metric')
     
+    # Check for relationship patterns
+    relationship_matches = [p for p in patterns['relationship'] if re.search(p, query_lower)]
+    if relationship_matches:
+        logger.debug(f"Relationship matches: {relationship_matches}")
+        intents.add('relationship')
+    
     # Check for risk patterns
     risk_matches = [p for p in patterns['risk'] if re.search(p, query_lower)]
     if risk_matches:
         logger.debug(f"Risk matches: {risk_matches}")
         intents.add('risk')
+    
+    # Special case: If we have a date/time and any value-related terms, it's temporal_metric
+    has_date = bool(re.search(r'\d{4}-\d{2}-\d{2}|(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}', query_lower))
+    has_value_terms = bool(re.search(r'total|value|amount|sum|cost|price|revenue|sales', query_lower))
+    
+    # Also check for month names with just the day
+    month_day = bool(re.search(r'(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?', query_lower))
+    
+    if (has_date or month_day) and has_value_terms:
+        intents.add('temporal')
+        intents.add('metric')
+        logger.debug("Detected combined temporal-metric query based on date and value terms")
     
     # Determine primary intent
     primary_intent = determine_primary_intent(intents)
