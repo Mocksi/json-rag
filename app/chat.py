@@ -23,8 +23,12 @@ The module integrates with various components including:
 from typing import List, Dict, Optional, Tuple
 import json
 from pydantic import ValidationError
+import argparse
+from pathlib import Path
+import logging
 
-from app.processing.parsing import extract_key_value_pairs, json_to_path_chunks
+from app.processing.parsing import extract_key_value_pairs
+from app.processing.json_parser import json_to_path_chunks, process_json_files
 from app.retrieval.embedding import get_embedding
 from app.analysis.archetype import ArchetypeDetector
 from app.analysis.relationships import process_relationships
@@ -32,7 +36,8 @@ from app.storage.database import (
     get_files_to_process,
     upsert_file_metadata,
     save_chunk_archetypes,
-    get_chunk_by_id
+    get_chunk_by_id,
+    init_db
 )
 from app.utils.utils import get_json_files, compute_file_hash
 from app.retrieval.retrieval import answer_query, QueryPipeline
@@ -591,3 +596,77 @@ def assemble_context(chunks: List[Dict], max_tokens: int = 3000) -> str:
     full_context += relationship_summary
     
     return full_context
+
+def run_test_queries(conn) -> None:
+    """Run all test queries from the test file."""
+    try:
+        with open('data/json_docs/test_queries', 'r') as f:
+            content = f.read()
+            
+        # Skip the directions line and parse queries
+        queries = []
+        for line in content.split('\n'):
+            if line.startswith('"') and line.endswith('"'):
+                # Remove quotes and any trailing punctuation
+                query = line.strip('"\n.,')
+                queries.append(query)
+        
+        logger.info(f"Running {len(queries)} test queries...")
+        
+        for i, query in enumerate(queries, 1):
+            print(f"\nYou: {query}")
+            response = answer_query(conn, query)
+            print(f"\nAssistant: {response}")
+            print("-" * 80)
+            
+    except FileNotFoundError:
+        logger.error("Test queries file not found at data/json_docs/test_queries")
+    except Exception as e:
+        logger.error(f"Error running test queries: {e}")
+
+def main():
+    """Main entry point for the chat application."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='JSON RAG System')
+    parser.add_argument('--test', action='store_true', help='Run test queries')
+    args = parser.parse_args()
+    
+    try:
+        # Initialize database connection
+        conn = init_db()
+        
+        if args.test:
+            # Run test queries mode
+            run_test_queries(conn)
+            return
+            
+        # Normal interactive mode
+        logger.info("Checking for new data to embed...")
+        
+        # Process any new JSON files
+        load_and_embed_new_data(conn)
+            
+        # Interactive query loop
+        while True:
+            try:
+                query = input("\nYou: ")
+                if query.lower() in ['exit', 'quit', 'q']:
+                    break
+                    
+                response = answer_query(conn, query)
+                print(f"\nAssistant: {response}")
+                
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                logger.error(f"Error processing query: {e}")
+                print("\nAssistant: I encountered an error. Please try again.")
+                
+    except Exception as e:
+        logger.error(f"Application error: {e}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+if __name__ == "__main__":
+    main()

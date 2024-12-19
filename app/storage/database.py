@@ -43,6 +43,7 @@ from datetime import datetime
 from pathlib import Path
 from app.core.config import POSTGRES_CONN_STR
 from app.utils.logging_config import get_logger
+import uuid
 
 def get_file_info(conn) -> Dict[str, Tuple[str, datetime]]:
     """
@@ -235,119 +236,35 @@ def reset_database(conn) -> None:
         cur.close()
 
 def init_db(conn) -> None:
-    """
-    Initialize database schema by creating required tables.
-    
-    This function sets up the initial database schema for the JSON RAG system.
-    It creates all necessary tables if they don't already exist, including
-    tables for storing document chunks, embeddings, metadata, and relationships.
-    
-    Schema Details:
-        json_chunks:
-            - id: Unique identifier for each chunk
-            - chunk_text: Raw text representation
-            - chunk_json: JSON structure of the chunk
-            - embedding: Vector representation (384 dimensions)
-            - metadata: Additional chunk information
-            - parent_id: Reference to parent chunk
-            - depth: Nesting level in document
-            - path: JSON path to chunk
-            - source_file: Original file path
-            
-        file_metadata:
-            - filename: Path to JSON file
-            - file_hash: SHA-256 hash of contents
-            - last_modified: Timestamp of last change
-            
-        chunk_key_values:
-            - chunk_id: Reference to chunk
-            - key: Searchable key name
-            - value: Associated value
-            
-        chunk_archetypes:
-            - chunk_id: Reference to chunk
-            - archetype: Detected pattern type
-            - confidence: Detection confidence score
-            - detected_at: Timestamp of detection
-            
-        chunk_relationships:
-            - source_chunk: Reference to source chunk
-            - target_chunk: Reference to target chunk
-            - relationship_type: Type of relationship
-            - metadata: Additional relationship data
-            - detected_at: Timestamp of detection
-            
-    Args:
-        conn: PostgreSQL database connection
-        
-    Example:
-        >>> conn = psycopg2.connect(DATABASE_URL)
-        >>> init_db(conn)  # Creates all tables
-        
-    Note:
-        - Safe to call multiple times (uses IF NOT EXISTS)
-        - Requires pgvector extension for embeddings
-        - All tables use appropriate foreign key constraints
-        - Automatically commits changes
-    """
+    """Initialize database schema."""
     cur = conn.cursor()
     
-    # Create tables if not exist
+    # Existing tables...
+    
+    # Update json_summaries table
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS json_chunks (
-            id TEXT PRIMARY KEY,
-            chunk_text TEXT NOT NULL,
-            chunk_json JSONB NOT NULL,
-            embedding vector(384),
-            metadata JSONB DEFAULT '{}'::jsonb,
-            parent_id TEXT REFERENCES json_chunks(id),
-            depth INTEGER DEFAULT 0,
-            path TEXT NOT NULL,
-            source_file TEXT NOT NULL
-        )
+    CREATE TABLE IF NOT EXISTS json_summaries (
+        id SERIAL PRIMARY KEY,
+        group_key TEXT,
+        group_type TEXT,
+        count INTEGER,
+        total_value NUMERIC,
+        metadata JSONB,
+        chunk_ids TEXT[] DEFAULT '{}',
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT unique_group_summary UNIQUE (group_key, group_type)
+    )
     """)
     
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS file_metadata (
-            filename TEXT PRIMARY KEY,
-            file_hash TEXT,
-            last_modified TIMESTAMP
-        )
-    """)
+    # Add new columns and indexes
+    cur.execute("ALTER TABLE json_chunks ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP")
+    cur.execute("ALTER TABLE json_chunks ADD COLUMN IF NOT EXISTS group_key TEXT")
+    cur.execute("ALTER TABLE json_chunks ADD COLUMN IF NOT EXISTS group_type TEXT")
     
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS chunk_key_values (
-            chunk_id TEXT,
-            key TEXT,
-            value TEXT
-        )
-    """)
-    
-    # New table for chunk archetypes
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS chunk_archetypes (
-            chunk_id TEXT,
-            archetype TEXT,
-            confidence FLOAT,
-            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (chunk_id, archetype),
-            FOREIGN KEY (chunk_id) REFERENCES json_chunks(id)
-        )
-    """)
-    
-    # New table for chunk relationships
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS chunk_relationships (
-            source_chunk TEXT,
-            target_chunk TEXT,
-            relationship_type TEXT,
-            metadata JSONB DEFAULT '{}'::jsonb,
-            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (source_chunk, target_chunk, relationship_type),
-            FOREIGN KEY (source_chunk) REFERENCES json_chunks(id),
-            FOREIGN KEY (target_chunk) REFERENCES json_chunks(id)
-        )
-    """)
+    # Create indexes
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_summaries_group_type ON json_summaries(group_type)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_summaries_chunks ON json_summaries USING GIN(chunk_ids)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_group ON json_chunks(group_key, group_type)")
     
     conn.commit()
 
@@ -595,89 +512,26 @@ def compute_file_hash(filepath: str) -> str:
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
 
-def store_chunk(conn, chunk_data: Dict, embedding: List[float]) -> str:
-    """
-    Store a document chunk with its embedding and metadata.
+def store_chunk(conn, chunk: Dict, timestamp: Optional[str] = None,
+                group_key: Optional[str] = None, 
+                group_type: Optional[str] = None) -> str:
+    """Store chunk with grouping information."""
+    chunk_id = str(uuid.uuid4())
     
-    This function handles the storage of document chunks, including their
-    vector embeddings, hierarchical information, and metadata. It supports
-    both new chunks and updates to existing ones through UPSERT operations.
-    
-    Args:
-        conn: PostgreSQL database connection
-        chunk_data (dict): Chunk information containing:
-            - id (str): Unique chunk identifier
-            - content (dict): JSON content of the chunk
-            - metadata (dict, optional): Additional chunk information
-            - parent_id (str, optional): ID of parent chunk
-            - depth (int, optional): Nesting level in document
-            - path (str): JSON path to chunk
-            - source_file (str): Original file path
-        embedding (list[float]): Vector embedding (384 dimensions)
-        
-    Returns:
-        str: ID of the stored chunk
-        
-    Example:
-        >>> conn = psycopg2.connect(DATABASE_URL)
-        >>> chunk = {
-        ...     'id': 'chunk123',
-        ...     'content': {'name': 'Example'},
-        ...     'metadata': {'type': 'user'},
-        ...     'path': '$.users[0]',
-        ...     'source_file': 'data/users.json'
-        ... }
-        >>> embedding = [0.1, 0.2, ..., 0.384]  # 384 dimensions
-        >>> chunk_id = store_chunk(conn, chunk, embedding)
-        
-    Note:
-        - Handles UPSERT operations automatically
-        - Converts embedding to database vector format
-        - Preserves hierarchical relationships
-        - Automatically commits changes
-        - Validates embedding dimensions
-    """
-    cur = conn.cursor()
-    
-    # Convert embedding to string format
-    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-    
-    # Extract required fields
-    chunk_id = chunk_data['id']
-    chunk_text = json.dumps(chunk_data['content'])
-    chunk_json = json.dumps(chunk_data['content'])
-    metadata = chunk_data.get('metadata', {})
-    parent_id = chunk_data.get('parent_id')
-    depth = chunk_data.get('depth', 0)
-    path = chunk_data.get('path', '')
-    source_file = chunk_data.get('source_file', '')
-    
-    # Store chunk with hierarchical information
-    cur.execute("""
+    with conn.cursor() as cur:
+        cur.execute("""
         INSERT INTO json_chunks 
-            (id, chunk_text, chunk_json, embedding, metadata, parent_id, depth, path, source_file)
-        VALUES (%s, %s, %s, %s::vector, %s::jsonb, %s, %s, %s, %s)
-        ON CONFLICT (id) DO UPDATE SET
-            chunk_text = EXCLUDED.chunk_text,
-            chunk_json = EXCLUDED.chunk_json,
-            embedding = EXCLUDED.embedding,
-            metadata = EXCLUDED.metadata,
-            parent_id = EXCLUDED.parent_id,
-            depth = EXCLUDED.depth,
-            path = EXCLUDED.path,
-            source_file = EXCLUDED.source_file
-    """, (
-        chunk_id,
-        chunk_text,
-        chunk_json,
-        embedding_str,
-        json.dumps(metadata),
-        parent_id,
-        depth,
-        path,
-        source_file
-    ))
-    
+            (id, chunk_json, timestamp, group_key, group_type)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+        """, (
+            chunk_id,
+            json.dumps(chunk),
+            timestamp,
+            group_key,
+            group_type
+        ))
+        
     conn.commit()
     return chunk_id
 
@@ -877,3 +731,21 @@ def get_chunk_with_context(conn, chunk_id: str, max_parent_depth: int = 3, max_c
         'parents': parents,
         'children': children
     }
+
+def update_summary(conn, group_key: str, group_type: str, data: Dict):
+    """Update or insert summary record."""
+    with conn.cursor() as cur:
+        cur.execute("""
+        INSERT INTO json_summaries (group_key, group_type, count, total_value, metadata)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (group_key, group_type) DO UPDATE
+        SET count = %s,
+            total_value = %s,
+            metadata = %s,
+            last_updated = CURRENT_TIMESTAMP
+        """, (
+            group_key, group_type, 
+            data['count'], data['total_value'], json.dumps(data.get('metadata', {})),
+            data['count'], data['total_value'], json.dumps(data.get('metadata', {}))
+        ))
+    conn.commit()

@@ -7,11 +7,13 @@ and converting JSON structures into processable chunks while preserving hierarch
 and relationships.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import hashlib
 import json
 from pathlib import Path
 from app.utils.logging_config import get_logger
+from collections import defaultdict
+import os
 
 logger = get_logger(__name__)
 
@@ -88,136 +90,219 @@ def normalize_json_path(path: str) -> str:
     
     return path
 
+def is_entity_like(obj: Dict) -> bool:
+    """
+    Check if an object represents a coherent unit that should be kept as a single chunk.
+    
+    The goal is to identify objects that form a logical unit based on their structure:
+    - Objects with a small number of direct fields (3-7) are likely coherent units
+    - Objects with too many fields or that are too nested are likely too big
+    - Objects with too few fields might be too granular
+    """
+    if not isinstance(obj, dict):
+        logger.debug(f"Object is not a dict: {type(obj)}")
+        return False
+        
+    # Count direct fields and check their types
+    field_count = len(obj)
+    has_nested = any(isinstance(v, (dict, list)) for v in obj.values())
+    
+    logger.debug(f"Checking object with {field_count} fields, has_nested={has_nested}")
+    
+    # Too few fields might be too granular
+    if field_count < 3:
+        logger.debug("Too few fields to be a coherent unit")
+        return False
+        
+    # Too many direct fields suggests this might be too large
+    if field_count > 7:
+        logger.debug("Too many fields to be a coherent unit")
+        return False
+    
+    # If it has nested structures but also has 3-7 direct fields, 
+    # it might be a good unit
+    if has_nested and 3 <= field_count <= 7:
+        logger.debug("Good size with some nested structure")
+        return True
+        
+    # If it has no nested structures but has 3-7 fields,
+    # it's likely a good unit
+    if not has_nested and 3 <= field_count <= 7:
+        logger.debug("Good size with flat structure")
+        return True
+    
+    logger.debug("Does not meet criteria for a coherent unit")
+    return False
+
 def json_to_path_chunks(
-    data: Any,
-    source_file: str,
-    parent_id: Optional[str] = None,
-    path: str = '',
-    depth: int = 0
+    json_obj: Dict,
+    file_path: str = '',
+    max_chunks: int = 100,
+    entities: Dict = None,
+    archetypes: List[Tuple[str, float]] = None,
+    chunk_strategy: str = 'hybrid'
 ) -> List[Dict]:
     """
-    Convert a JSON structure into a list of chunks with path information.
-    
-    This function recursively traverses a JSON structure and creates chunks
-    that preserve the hierarchical relationships and context.
+    Convert a JSON object into path-based chunks, with a configurable strategy.
     
     Args:
-        data (Any): JSON data to process
-        source_file (str): Path to the source JSON file
-        parent_id (Optional[str]): ID of the parent chunk
-        path (str): Current JSON path
-        depth (int): Current recursion depth
-        
-    Returns:
-        List[Dict]: List of chunks, each containing:
-            - id: Unique chunk identifier
-            - content: The chunk's JSON content
-            - path: Full JSON path to the chunk
-            - parent_id: ID of parent chunk (if any)
-            - metadata: Additional chunk information
-            
-    Note:
-        The function implements smart chunking strategies based on:
-        - Data structure complexity
-        - Semantic completeness
-        - Maximum chunk size constraints
+        json_obj (dict): The JSON object to chunk
+        file_path (str): The file path for logging
+        max_chunks (int): Max number of chunks to produce
+        entities (dict): (Optional) Additional entity detection config
+        archetypes (List[Tuple[str, float]]): (Optional) Archetype info
+        chunk_strategy (str): 'full' (old behavior) or 'hybrid' (less granular)
     """
     chunks = []
+    logger.debug(f"=== Starting JSON chunking for file: {file_path} with strategy={chunk_strategy} ===")
     
-    # Normalize the path
-    normalized_path = normalize_json_path(path)
-    current_id = generate_chunk_id(source_file, normalized_path)
-    
-    # Create chunk for current node
-    chunk = {
-        'id': current_id,
-        'content': data,
-        'parent_id': parent_id,
-        'depth': depth,
-        'path': normalized_path,
-        'source_file': source_file,
-        'metadata': {
-            'depth': depth,
-            'has_children': isinstance(data, (dict, list)),
-            'type': 'array' if isinstance(data, list) else 'object' if isinstance(data, dict) else 'value'
-        }
-    }
-    chunks.append(chunk)
-    
-    # Process child nodes
-    if isinstance(data, dict):
-        for key, value in data.items():
-            # Handle special cases for arrays of objects with IDs
-            if isinstance(value, list) and value and isinstance(value[0], dict) and 'id' in value[0]:
-                # Create a container chunk for the array
-                array_path = normalize_json_path(f"{normalized_path}.{key}" if normalized_path else key)
-                array_id = generate_chunk_id(source_file, array_path)
-                array_chunk = {
-                    'id': array_id,
-                    'content': {'type': 'array', 'count': len(value)},
-                    'parent_id': current_id,
-                    'depth': depth + 1,
-                    'path': array_path,
-                    'source_file': source_file,
+    def process_value(obj, path='', parent_path=None, context=None):
+        if context is None:
+            context = {}
+            
+        if len(chunks) >= max_chunks:
+            logger.warning(f"Reached max chunks limit ({max_chunks})")
+            return
+            
+        if isinstance(obj, dict):
+            # Check if this is an entity-like object we should keep together
+            logger.debug(f"=== Checking if object at path '{path}' is entity-like ===")
+            logger.debug(f"Object keys: {list(obj.keys())}")
+            
+            if chunk_strategy == 'hybrid' and is_entity_like(obj):
+                logger.debug(f"=== FOUND ENTITY-LIKE OBJECT at path: {path} ===")
+                chunk = {
+                    'path': path,
+                    'value': obj,
+                    'context': context,
+                    'parent_path': parent_path,
                     'metadata': {
-                        'depth': depth + 1,
-                        'has_children': True,
-                        'type': 'array'
+                        'has_children': any(isinstance(v, (dict, list)) for v in obj.values()),
+                        'chunked_as_entity': True,
+                        'field_count': len(obj)
                     }
                 }
-                chunks.append(array_chunk)
+                if entities:
+                    chunk['entities'] = entities
+                if archetypes:
+                    chunk['archetypes'] = archetypes
+                chunks.append(chunk)
+                return  # Stop recursion - entire object is one chunk
                 
-                # Create chunks for each array item, using their IDs in the path
-                for item in value:
-                    if isinstance(item, dict) and 'id' in item:
-                        item_path = normalize_json_path(f"{array_path}.{item['id']}")
-                        child_chunks = json_to_path_chunks(item, source_file, array_id, item_path, depth + 2)
-                        chunks.extend(child_chunks)
-            else:
-                # Normal object property
-                new_path = normalize_json_path(f"{normalized_path}.{key}" if normalized_path else key)
-                child_chunks = json_to_path_chunks(value, source_file, current_id, new_path, depth + 1)
-                chunks.extend(child_chunks)
-    elif isinstance(data, list):
-        # Create chunks for array items
-        for index, item in enumerate(data):
-            if isinstance(item, dict) and 'id' in item:
-                # Use ID in path for objects with IDs
-                new_path = normalize_json_path(f"{normalized_path}.{item['id']}")
-            else:
-                # Use index for other items
-                new_path = normalize_json_path(f"{normalized_path}.{index}")
-            child_chunks = json_to_path_chunks(item, source_file, current_id, new_path, depth + 1)
-            chunks.extend(child_chunks)
+            logger.debug(f"=== Object at path '{path}' was NOT entity-like, processing fields individually ===")
             
-    return chunks
-
-def process_json_file(file_path: str) -> List[Dict]:
-    """
-    Process a JSON file and convert it into chunks.
+            # Process as normal dictionary if not entity-like or using full strategy
+            has_any_children = False
+            for k, v in obj.items():
+                child_path = f"{path}.{k}" if path else k
+                new_context = {**context}
+                # Add current object's fields to context
+                for ck, cv in obj.items():
+                    if not isinstance(cv, (dict, list)):
+                        new_context[f"{path}_{ck}" if path else ck] = cv
+                process_value(v, child_path, path, new_context)
+                has_any_children = True
+                
+            # Create chunk for empty dict
+            if not has_any_children:
+                chunk = {
+                    'path': path,
+                    'value': obj,
+                    'context': context,
+                    'parent_path': parent_path,
+                    'metadata': {'has_children': False}
+                }
+                if entities:
+                    chunk['entities'] = entities
+                if archetypes:
+                    chunk['archetypes'] = archetypes
+                chunks.append(chunk)
+                
+        elif isinstance(obj, list):
+            logger.debug(f"=== Processing list at path '{path}' ===")
+            # Handle arrays of objects - check each object in the array
+            if obj and all(isinstance(item, dict) for item in obj):
+                logger.debug(f"=== List contains all dict items, checking if they are entity-like ===")
+                # If any object in the array is entity-like, treat each object as a chunk
+                if any(is_entity_like(item) for item in obj):
+                    logger.debug(f"=== FOUND ARRAY OF ENTITY-LIKE OBJECTS at path: {path} ===")
+                    for i, item in enumerate(obj):
+                        chunk = {
+                            'path': f"{path}[{i}]",
+                            'value': item,
+                            'context': context,
+                            'parent_path': parent_path,
+                            'metadata': {
+                                'is_collection_item': True,
+                                'collection_path': path,
+                                'item_index': i,
+                                'chunked_as_entity': True
+                            }
+                        }
+                        if entities:
+                            chunk['entities'] = entities
+                        if archetypes:
+                            chunk['archetypes'] = archetypes
+                        chunks.append(chunk)
+                    return  # Stop recursion - each object is its own chunk
+                
+                logger.debug(f"=== List items were NOT entity-like, processing individually ===")
+            
+            # Process list items individually if not entity-like objects
+            for i, item in enumerate(obj):
+                new_path = f"{path}[{i}]"
+                process_value(item, new_path, path, context)
+        else:
+            # Only create chunks for primitive values if they're not part of an entity
+            chunk = {
+                'path': path,
+                'value': obj,
+                'context': context,
+                'parent_path': parent_path,
+                'metadata': {
+                    'is_primitive': True,
+                    'value_type': type(obj).__name__
+                }
+            }
+            if entities:
+                chunk['entities'] = entities
+            if archetypes:
+                chunk['archetypes'] = archetypes
+            chunks.append(chunk)
+            
+    process_value(json_obj)
+    logger.debug(f"Generated {len(chunks)} chunks")
     
-    Args:
-        file_path (str): Path to the JSON file to process
-        
-    Returns:
-        List[Dict]: List of processed chunks with metadata
-        
-    Raises:
-        FileNotFoundError: If the file doesn't exist
-        json.JSONDecodeError: If the file contains invalid JSON
-        
-    Note:
-        This is the main entry point for processing JSON files.
-        It handles file reading, JSON parsing, and chunk generation.
-    """
-    file_path = Path(file_path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-        
-    with open(file_path) as f:
-        data = json.load(f)
-        
-    return json_to_path_chunks(data, str(file_path))
+    # Log chunk statistics
+    path_depths = [len(c['path'].split('.')) for c in chunks]
+    if path_depths:
+        logger.debug(f"Path depth stats: min={min(path_depths)}, max={max(path_depths)}, avg={sum(path_depths)/len(path_depths):.1f}")
+    
+    value_types = defaultdict(int)
+    for c in chunks:
+        value_types[type(c['value']).__name__] += 1
+    logger.debug(f"Value type distribution: {dict(value_types)}")
+    
+    return chunks[:max_chunks]
+
+def process_json_files(directory: str) -> List[Dict]:
+    """Process all JSON files in directory."""
+    all_chunks = []
+    
+    # Walk through directory
+    for root, _, files in os.walk(directory):
+        for file in files:
+            # Skip test queries file
+            if file == 'test_queries':
+                continue
+                
+            if file.endswith('.json'):
+                file_path = os.path.join(root, file)
+                with open(file_path) as f:
+                    data = json.load(f)
+                    all_chunks.extend(json_to_path_chunks(data, str(file_path)))
+    
+    return all_chunks
 
 def get_chunk_hierarchy_info(chunk: Dict) -> Dict:
     """

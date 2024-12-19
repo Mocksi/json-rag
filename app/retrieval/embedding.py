@@ -178,85 +178,60 @@ def compute_similarity(embedding1, embedding2):
 
 def get_base_chunks(conn, query: str, filters: Dict = None, limit: int = 20) -> List[Dict]:
     """Get base chunks using semantic search."""
-    cur = None
     try:
-        cur = conn.cursor()
-        
-        # Get query embedding
+        logger.debug(f"Generating embedding for query: {query}")
         query_embedding = get_embedding(query)
-        embedding_array = "[" + ",".join(f"{x:.10f}" for x in query_embedding) + "]"
-        logger.debug(f"Generated embedding array of length {len(query_embedding)}")
+        logger.debug(f"Generated embedding of size {len(query_embedding)}")
         
         # Build WHERE clause from filters
-        where_clauses = ["embedding IS NOT NULL"]
-        params = []
+        where_conditions = ["embedding IS NOT NULL"]
+        
+        # Convert numpy array to list for psycopg2
+        embedding_list = query_embedding.tolist()
+        params = [embedding_list, embedding_list, limit]  # Two embeddings for the query, and limit
         
         if filters:
-            logger.debug(f"Processing filters: {filters}")
-            if filters.get("product_id"):
-                product_ids = filters["product_id"]
-                if isinstance(product_ids, list):
-                    conditions = []
-                    for pid in product_ids:
-                        conditions.append("""
-                            (chunk_json->>'product_id' = %s OR 
-                             chunk_json->'context'->>'product_id' = %s)
-                        """)
-                        params.extend([pid, pid])  # Add param twice for both conditions
-                    where_clauses.append(f"({' OR '.join(conditions)})")
-                else:
-                    where_clauses.append("""
-                        (chunk_json->>'product_id' = %s OR 
-                         chunk_json->'context'->>'product_id' = %s)
-                    """)
-                    params.extend([product_ids, product_ids])
+            logger.debug(f"Applying filters: {json.dumps(filters, indent=2)}")
             
-        where_clause = " AND ".join(where_clauses)
-        logger.debug(f"Built WHERE clause: {where_clause}")
+            # Only apply non-temporal filters in SQL
+            if filters.get("type"):
+                where_conditions.append("metadata->>'type' = %s")
+                params.insert(-1, filters["type"])
         
-        # Get most relevant chunks
-        sql = f"""
-        SELECT 
-            id,
-            chunk_json,
-            chunk_text,
-            metadata,
-            source_file,
-            embedding <=> %s::vector as distance
-        FROM json_chunks
-        WHERE {where_clause}
-        ORDER BY embedding <=> %s::vector
-        LIMIT %s
-        """
+        where_clause = " AND ".join(where_conditions)
         
-        # Add embedding array and limit to params
-        params = [embedding_array] + params + [embedding_array, limit]
-        logger.debug(f"Executing query with {len(params)} params")
-        
-        cur.execute(sql, tuple(params))
-        results = cur.fetchall()
-        logger.debug(f"Found {len(results)} results")
-        
-        chunks = []
-        for row in results:
-            chunk_id, chunk_json, chunk_text, metadata, source_file, distance = row
-            chunks.append({
-                'id': chunk_id,
-                'content': json.loads(chunk_json) if isinstance(chunk_json, str) else chunk_json,
-                'text': chunk_text,
-                'metadata': metadata,
-                'source_file': source_file,
-                'score': 1 - distance if distance is not None else 0
-            })
+        # Execute query with filters
+        with conn.cursor() as cur:
+            query = f"""
+            SELECT 
+                id,
+                chunk_json,
+                metadata,
+                source_file,
+                embedding <=> %s::vector as distance
+            FROM json_chunks
+            WHERE {where_clause}
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+            """
             
-        return chunks
-        
+            logger.debug(f"Executing query: {query}")
+            logger.debug(f"Query params: {params}")
+            
+            cur.execute(query, params)
+            results = cur.fetchall()
+            
+            return [
+                {
+                    "id": r[0],
+                    "chunk_json": r[1],
+                    "metadata": r[2],
+                    "source_file": r[3],
+                    "distance": float(r[4])
+                }
+                for r in results
+            ]
+            
     except Exception as e:
-        logger.error(f"Error getting base chunks: {e}")
-        if conn:
-            conn.rollback()
+        logger.error(f"Error in chunk retrieval: {e}", exc_info=True)
         return []
-        
-    finally:
-        if cur and not cur.closed:
-            cur.close()

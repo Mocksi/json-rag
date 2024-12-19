@@ -8,11 +8,12 @@ preserving hierarchical relationships and semantic context.
 from typing import List, Dict, Optional
 import json
 from pathlib import Path
-from app.storage.database import store_chunk, get_chunk_with_context
+from app.storage.database import store_chunk, get_chunk_with_context, update_summary
 from app.processing.json_parser import process_json_file, combine_chunk_with_context
 from app.retrieval.embedding import get_embedding
 from app.analysis.relationships import process_relationships
 from app.utils.logging_config import get_logger
+from collections import defaultdict
 
 logger = get_logger(__name__)
 
@@ -151,3 +152,82 @@ class JSONProcessor:
             cur.close()
             
             logger.info(f"Reprocessed {len(chunk_ids)} chunks with {len(relationships)} relationships")
+
+def process_json_files(conn, file_paths: List[str]):
+    """Process JSON files with grouping."""
+    for path in file_paths:
+        with open(path) as f:
+            data = json.load(f)
+            
+        # Process chunks with group info
+        chunks = create_chunks(data)
+        for chunk in chunks:
+            # Extract timestamp if available
+            timestamp = None
+            if "timestamp" in chunk:
+                timestamp = chunk["timestamp"]
+            elif "date" in chunk:
+                timestamp = chunk["date"]
+                
+            # Determine group type and key
+            group_type = determine_group_type(chunk)
+            group_key = extract_group_key(chunk, group_type)
+            
+            # Store chunk with group info
+            chunk_id = store_chunk(conn, chunk, timestamp=timestamp, 
+                                 group_key=group_key, group_type=group_type)
+            
+            # Update summaries
+            update_group_summary(conn, chunk, chunk_id, group_key, group_type)
+
+def determine_group_type(chunk: Dict) -> str:
+    """Determine appropriate grouping for chunk."""
+    if "timestamp" in chunk or "date" in chunk:
+        return "date"
+    if "type" in chunk:
+        return "type"
+    if "category" in chunk:
+        return "category"
+    return "default"
+
+def extract_group_key(chunk: Dict, group_type: str) -> str:
+    """Extract group key based on type."""
+    if group_type == "date":
+        timestamp = chunk.get("timestamp") or chunk.get("date")
+        if timestamp:
+            return timestamp.split("T")[0]  # Get date part
+    return chunk.get(group_type, "unknown")
+
+def update_group_summary(conn, chunk: Dict, chunk_id: str, 
+                        group_key: str, group_type: str):
+    """Update summary for a group."""
+    with conn.cursor() as cur:
+        # Get existing summary
+        cur.execute("""
+        SELECT id, count, total_value, chunk_ids
+        FROM json_summaries
+        WHERE group_key = %s AND group_type = %s
+        """, (group_key, group_type))
+        
+        result = cur.fetchone()
+        
+        if result:
+            # Update existing summary
+            summary_id, count, total, chunk_ids = result
+            cur.execute("""
+            UPDATE json_summaries
+            SET count = count + 1,
+                total_value = total_value + %s,
+                chunk_ids = array_append(chunk_ids, %s),
+                last_updated = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """, (chunk.get("value", 0), chunk_id, summary_id))
+        else:
+            # Create new summary
+            cur.execute("""
+            INSERT INTO json_summaries 
+                (group_key, group_type, count, total_value, chunk_ids)
+            VALUES (%s, %s, 1, %s, ARRAY[%s])
+            """, (group_key, group_type, chunk.get("value", 0), chunk_id))
+            
+    conn.commit()
