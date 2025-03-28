@@ -14,17 +14,18 @@ import logging
 import os
 
 # Default to INFO, but allow override through environment variable
-LOG_LEVEL = os.environ.get('APP_LOG_LEVEL', 'INFO').upper()
+LOG_LEVEL = os.environ.get("APP_LOG_LEVEL", "INFO").upper()
+
 
 def configure_logging():
     """
     Configure global logging settings for the application.
-    
+
     This function sets up:
     - Log level (configurable via APP_LOG_LEVEL environment variable)
     - Log format with timestamp, logger name, level, and message
     - Timestamp format (YYYY-MM-DD HH:MM:SS)
-    
+
     Example:
         >>> configure_logging()
         >>> logger = logging.getLogger(__name__)
@@ -33,20 +34,21 @@ def configure_logging():
     """
     logging.basicConfig(
         level=LOG_LEVEL,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
+
 
 def get_logger(name):
     """
     Get a logger instance with consistent configuration.
-    
+
     Args:
         name (str): The name for the logger, typically __name__
-        
+
     Returns:
         logging.Logger: Configured logger instance
-        
+
     Example:
         >>> logger = get_logger(__name__)
         >>> logger.debug("Processing started")

@@ -46,24 +46,23 @@ A tool for efficiently loading and integrating nested JSON data structures into 
 ```bash
 git clone https://github.com/Mocksi/json-rag.git
 cd json_rag
-python -m venv rag_env
-source rag_env/bin/activate  # Windows: rag_env\Scripts\activate
-pip install -r requirements.txt
+uv venv rag_env
+source rag_env/bin/activate  # Windows: .\rag_env\Scripts\activate
+uv pip install -r requirements.txt
 ```
 
-2. Configure database:
-```bash
-# Update POSTGRES_CONN_STR in app/config.py:
-POSTGRES_CONN_STR = "dbname=myragdb user=your_user host=localhost port=5432"
-```
-
-3. Set up environment:
+2. Set up environment:
 ```bash
 # Create .env file with:
 OPENAI_API_KEY=your-key-here
+POSTGRES_DB=crowllector
+POSTGRES_USER=crowllector
+POSTGRES_PASSWORD=yourpassword
+POSTGRES_HOST=localhost
+POSTGRES_DB_PORT=5432
 ```
 
-4. Initialize and run:
+3. Initialize and run:
 ```bash
 python -m app.main --new  # Truncates all tables and starts fresh
 python -m app.main        # Normal operation

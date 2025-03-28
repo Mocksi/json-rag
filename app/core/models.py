@@ -1,17 +1,17 @@
-from pydantic import BaseModel
+from typing import Dict, Any
+from pydantic import RootModel
 
-class FlexibleModel(BaseModel):
+
+class FlexibleModel(RootModel[Dict[str, Any]]):
     """
     A flexible Pydantic model that can validate any JSON structure.
-    
-    Attributes:
-        __root__ (dict): The root JSON object to validate
-        
+
     Usage:
-        validated = FlexibleModel.parse_obj(json_data)
-        json_dict = validated.__root__
-        
+        validated = FlexibleModel.model_validate(json_data)
+        json_dict = validated.root
+
     Note:
         Used for basic JSON validation without enforcing specific schema
     """
-    __root__: dict
+
+    pass
