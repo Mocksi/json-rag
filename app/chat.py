@@ -502,13 +502,13 @@ def build_prompt(query: str, context: List[str], query_intent: Dict) -> str:
     return prompt
 
 
-def assemble_context(chunks: List[Dict], max_tokens: int = 1500) -> str:
+def assemble_context(chunks: List[Dict], max_tokens: int = 8000) -> str:
     """
     Assemble context for the LLM, organizing chunks by their relationships.
 
     Args:
         chunks: List of chunks with relationships
-        max_tokens: Maximum tokens to include
+        max_tokens: Maximum tokens to include (default reduced to 8000 to leave room for system prompt and query)
 
     Returns:
         Formatted context string
@@ -524,14 +524,14 @@ def assemble_context(chunks: List[Dict], max_tokens: int = 1500) -> str:
         # Limit the size of content to prevent token overflow
         if isinstance(content, dict):
             # Keep only first-level key-value pairs for large objects
-            if len(json.dumps(content)) > 1000:
+            if len(json.dumps(content)) > 500:  # Reduced from 1000
                 simplified = {}
                 for k, v in content.items():
-                    if isinstance(v, (dict, list)) and len(json.dumps(v)) > 300:
+                    if isinstance(v, (dict, list)) and len(json.dumps(v)) > 200:  # Reduced from 300
                         if isinstance(v, dict):
-                            simplified[k] = {key: "..." for key in list(v.keys())[:5]}
-                            if len(v) > 5:
-                                simplified[k]["..."] = f"({len(v) - 5} more items)"
+                            simplified[k] = {key: "..." for key in list(v.keys())[:3]}  # Reduced from 5
+                            if len(v) > 3:
+                                simplified[k]["..."] = f"({len(v) - 3} more items)"
                         else:  # list
                             simplified[k] = ["..."] if len(v) > 0 else []
                             simplified[k].append(f"({len(v)} items total)")
@@ -547,7 +547,7 @@ def assemble_context(chunks: List[Dict], max_tokens: int = 1500) -> str:
             for rel in relationships:
                 rel_type = rel["type"]
                 confidence = rel.get("confidence", 0.0)
-                if confidence >= 0.6:  # Only include high-confidence relationships
+                if confidence >= 0.7:  # Increased from 0.6 to be more selective
                     chunk_text += f"\n- {rel_type.upper()}: {rel.get('metadata', {}).get('value', 'N/A')}"
 
         return chunk_text
@@ -570,16 +570,16 @@ def assemble_context(chunks: List[Dict], max_tokens: int = 1500) -> str:
     context_parts = []
     token_count = 0
 
-    # Add primary information (60% of token budget)
-    primary_token_limit = int(max_tokens * 0.6)
+    # Add primary information (70% of token budget)
+    primary_token_limit = int(max_tokens * 0.7)
     for chunk in primary_chunks:
         if token_count >= primary_token_limit:
             break
         context_parts.append(format_chunk(chunk, "Primary Information"))
         token_count += len(context_parts[-1].split())
 
-    # Add supporting information (30% of token budget)
-    supporting_token_limit = int(max_tokens * 0.3)
+    # Add supporting information (20% of token budget)
+    supporting_token_limit = int(max_tokens * 0.2)
     for chunk in supporting_chunks:
         if token_count >= primary_token_limit + supporting_token_limit:
             break
@@ -609,7 +609,7 @@ def assemble_context(chunks: List[Dict], max_tokens: int = 1500) -> str:
             1
             for chunk in chunks
             for rel in chunk.get("relationships", [])
-            if rel["type"] == rel_type and rel.get("confidence", 0) >= 0.6
+            if rel["type"] == rel_type and rel.get("confidence", 0) >= 0.7  # Increased from 0.6
         )
         if rel_count > 0:
             relationship_summary += (

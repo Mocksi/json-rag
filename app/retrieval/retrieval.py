@@ -147,6 +147,8 @@ class TwoTierRetrieval:
     def __init__(self, conn):
         self.conn = conn
         self.logger = get_logger(__name__)
+        self.max_chunks = 3  # Limit number of chunks
+        self.max_relationships = 3  # Limit number of relationships per chunk
 
     def get_data(self, query: str, analysis: Dict) -> List[Dict]:
         """Multi-step retrieval process with focused context building."""
@@ -160,7 +162,7 @@ class TwoTierRetrieval:
                 self.conn,
                 query,
                 filters=analysis.get("filters", {}),
-                limit=5,  # Start with fewer chunks
+                limit=self.max_chunks,  # Use max_chunks limit
             )
 
             if not results:
@@ -225,32 +227,35 @@ class TwoTierRetrieval:
     ) -> Optional[Dict]:
         """Build focused context for a chunk based on analysis of what's needed."""
         try:
-            # Initialize archetype detector
-            detector = ArchetypeDetector()
+            # Get archetypes for the chunk
+            archetypes = ArchetypeDetector().detect_archetypes(chunk["chunk_json"])
 
-            # Get archetypes and relationships
-            archetypes = detector.detect_archetypes(chunk["chunk_json"])
-            relationships = detector.detect_relationships(chunk["chunk_json"])
+            # Get relationships for the chunk
+            relationships = []
+            cur.execute(
+                """
+                SELECT relationship_type, target_chunk, metadata
+                FROM chunk_relationships
+                WHERE source_chunk = %s
+                ORDER BY metadata->>'confidence' DESC
+                LIMIT %s
+                """,
+                (chunk["id"], self.max_relationships),
+            )
+            for rel in cur.fetchall():
+                relationships.append({
+                    "type": rel[0],
+                    "target": rel[1],
+                    "metadata": rel[2],
+                })
 
-            # Build focused query conditions
-            conditions = []
+            # Build where clause for related chunks
+            where_clause = "1=1"
             params = []
-
-            # Only get related chunks that share relevant entities
-            if chunk["metadata"].get("entity_id") in needed_context["entity_ids"]:
-                conditions.append("c.metadata->>'entity_id' = %s")
-                params.append(chunk["metadata"]["entity_id"])
-
-            # Only get chunks within relevant time range if needed
-            if needed_context["time_range"]["start"]:
-                conditions.append("c.metadata->>'timestamp' >= %s")
-                params.append(needed_context["time_range"]["start"])
-            if needed_context["time_range"]["end"]:
-                conditions.append("c.metadata->>'timestamp' <= %s")
-                params.append(needed_context["time_range"]["end"])
-
-            # Build WHERE clause
-            where_clause = " AND ".join(conditions) if conditions else "TRUE"
+            if needed_context.get("temporal"):
+                where_clause += " AND metadata->>'type' = 'temporal'"
+            if needed_context.get("entity"):
+                where_clause += " AND metadata->>'type' = 'entity'"
 
             # Get focused set of related chunks
             cur.execute(
@@ -291,9 +296,9 @@ class TwoTierRetrieval:
                     metadata
                 FROM chunk_tree
                 ORDER BY id, tree_depth
-                LIMIT 5  -- Reduce related chunks
+                LIMIT %s  -- Limit related chunks
             """,
-                params + [chunk["id"]],
+                params + [chunk["id"], self.max_chunks],
             )
 
             related = cur.fetchall()

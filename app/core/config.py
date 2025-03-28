@@ -53,9 +53,12 @@ model_name = "sentence-transformers/all-MiniLM-L6-v2"  # Efficient, general-purp
 embedding_model = SentenceTransformer(model_name)
 
 # Retrieval system parameters
-MAX_CHUNKS = 2  # Maximum chunks to return in search results (reduced from 4 to reduce token usage)
+MAX_CHUNKS = 3  # Maximum chunks to return in search results
+MAX_RELATIONSHIPS = 3  # Maximum relationships per chunk
+MAX_CONTEXT_TOKENS = 8000  # Maximum tokens for context (leaving room for system prompt and query)
+MAX_CHUNK_SIZE = 500  # Maximum size for individual chunks in characters
 
 # Relationship detection configuration
 SIMILARITY_THRESHOLD = 0.85  # Minimum cosine similarity for semantic relationships
 MIN_RELATIONSHIP_CONFIDENCE = 0.7  # Minimum confidence score for relationship detection
-MAX_SEMANTIC_MATCHES = 5  # Maximum semantic matches per entity search
+MAX_SEMANTIC_MATCHES = 3  # Reduced from 5 to limit context size
