@@ -1,0 +1,19 @@
+services:
+  chroma:
+    image: chromadb/chroma:0.4.24
+    environment:
+      - ALLOW_RESET=true
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=9091
+    ports:
+      - "9091:9091"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  chroma_data:

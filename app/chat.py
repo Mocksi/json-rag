@@ -74,7 +74,7 @@ def serialize_for_debug(obj):
     return obj
 
 
-def load_and_embed_new_data(conn):
+def load_and_embed_new_data(store):
     """
     Load and embed new or modified JSON files into the vector database.
 
@@ -108,7 +108,7 @@ def load_and_embed_new_data(conn):
             - Stores relationship metadata
 
     Args:
-        conn: PostgreSQL database connection
+        store: Database connection (PostgreSQL) or collection (ChromaDB)
 
     Returns:
         bool: True if processing completed successfully
@@ -124,9 +124,19 @@ def load_and_embed_new_data(conn):
         - Maintains file metadata for incremental updates
     """
     print("\nChecking for new data to embed...")
-
-    # Get list of files that need processing
-    documents = get_files_to_process(conn, compute_file_hash, get_json_files)
+    
+    # Determine if we're using PostgreSQL or ChromaDB
+    is_postgres = hasattr(store, 'cursor')
+    
+    if is_postgres:
+        # Get list of files that need processing using PostgreSQL
+        documents = get_files_to_process(store, compute_file_hash, get_json_files)
+    else:
+        # For ChromaDB, we'll just process all JSON files
+        from glob import glob
+        import os
+        json_files = glob(os.path.join(os.getenv("JSON_DATA_DIR", "data/json_docs"), "**/*.json"), recursive=True)
+        documents = [(f, compute_file_hash(f), os.path.getmtime(f)) for f in json_files]
 
     if not documents:
         logger.info("No new or modified files to process.")
@@ -164,10 +174,14 @@ def load_and_embed_new_data(conn):
     # Generate embeddings in batches
     chunk_texts = [json.dumps(c[1]) for c in all_chunks]  # Serialize chunk data
     embedding_model.encode(chunk_texts, show_progress_bar=True)
-
+    
     # Second pass: Store all chunks and build cache
-    cur = conn.cursor()
     logger.info("Storing chunks and building cache...")
+    
+    # Initialize cursor for PostgreSQL
+    cur = None
+    if is_postgres:
+        cur = store.cursor()
     for i, (f, chunk) in enumerate(all_chunks):
         # Generate proper chunk ID using our new system
         chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
@@ -188,8 +202,7 @@ def load_and_embed_new_data(conn):
 
         # Generate embedding with archetype context
         embedding_list = get_embedding(json.dumps(chunk), archetype).tolist()
-        embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
-
+        
         chunk_metadata = {
             "archetypes": [{"type": a[0], "confidence": a[1]} for a in chunk_archetypes]
             if chunk_archetypes
@@ -198,164 +211,199 @@ def load_and_embed_new_data(conn):
             "chunk_index": i,
         }
 
-        # Store the chunk with its embedding
-        cur.execute(
-            """
-            INSERT INTO json_chunks (
-                id, chunk_json, embedding, metadata,
-                path, file_path
-            )
-            VALUES (%s, %s::jsonb, %s::vector, %s::jsonb, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                chunk_json = EXCLUDED.chunk_json,
-                embedding = EXCLUDED.embedding,
-                metadata = EXCLUDED.metadata,
-                path = EXCLUDED.path,
-                file_path = EXCLUDED.file_path
-        """,
-            (
-                chunk_id,
-                json.dumps(chunk),  # chunk_json
-                embedding_str,  # embedding
-                json.dumps(chunk_metadata),  # metadata
-                chunk.get("path", ""),  # path
-                f,  # file_path
-            ),
-        )
-
-    # Third pass: Create relationships now that all chunks are cached
-    logger.info("Creating relationships...")
-
-    # First, build a map of all IDs to their chunks
-    id_to_chunk = {}
-    for i, (f, chunk) in enumerate(all_chunks):
-        chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
-
-        # If this chunk has an ID value, map it
-        if chunk.get("value") and isinstance(chunk.get("value"), str):
-            path_parts = chunk.get("path", "").split(".")
-            if any(part.endswith("id") or part == "id" for part in path_parts):
-                id_to_chunk[chunk.get("value")] = {
-                    "chunk_id": chunk_id,
-                    "path": chunk.get("path"),
-                    "chunk": chunk,
-                }
-
-    # Now process relationships using the ID map
-    for i, (f, chunk) in enumerate(all_chunks):
-        chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
-        logger.debug(f"Processing relationships for chunk: {chunk_id}")
-        logger.debug(f"Chunk path: {chunk.get('path')}")
-
-        # Extract relationships from chunk value and context
-        context = chunk.get("context", {})
-
-        # Helper function to extract all ID fields from a dict
-        def extract_ids(obj, prefix=""):
-            """
-            Recursively extract ID fields from nested dictionaries and lists.
-
-            This helper function traverses complex data structures to find and
-            collect ID fields, maintaining the full path context through prefixing.
-            It handles both direct ID fields and nested structures.
-
-            Args:
-                obj: Object to extract IDs from (dict or list)
-                prefix: String prefix for nested field names (default: '')
-
-            Returns:
-                dict: Mapping of ID field paths to their values, where:
-                    - Keys are the full path to the ID field
-                    - Values are the ID values found
-
-            Example:
-                >>> data = {
-                ...     'user': {
-                ...         'id': '123',
-                ...         'team': {'team_id': 'T456'}
-                ...     }
-                ... }
-                >>> extract_ids(data)
-                {'user_id': '123', 'user_team_team_id': 'T456'}
-
-            Note:
-                - Handles both 'id' and '*_id' field patterns
-                - Maintains path context through nesting
-                - Processes both objects and arrays
-            """
-            ids = {}
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if isinstance(v, str) and (k.endswith("_id") or k == "id"):
-                        ids[prefix + k if prefix else k] = v
-                    elif isinstance(v, (dict, list)):
-                        ids.update(
-                            extract_ids(v, prefix + k + "_" if prefix else k + "_")
-                        )
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    if isinstance(item, dict):
-                        ids.update(extract_ids(item, prefix))
-            return ids
-
-        # Extract all IDs from context
-        all_ids = extract_ids(context)
-        logger.debug(f"Found IDs in context: {all_ids}")
-
-        # Create relationships for each ID
-        for key, val in all_ids.items():
-            if val in id_to_chunk:
-                target_info = id_to_chunk[val]
-                logger.debug(f"Found target chunk for ID {val}: {target_info['path']}")
-
-                # Determine relationship type based on key
-                rel_type = "reference"
-                if key.startswith("shipments_"):
-                    rel_type = "shipment_reference"
-                elif key.startswith("warehouses_"):
-                    rel_type = "warehouse_reference"
-                elif key.startswith("products_"):
-                    rel_type = "product_reference"
-                elif key.startswith("suppliers_"):
-                    rel_type = "supplier_reference"
-
-                cur.execute(
-                    """
-                    INSERT INTO chunk_relationships 
-                    (source_chunk, target_chunk, relationship_type, metadata)
-                    VALUES (%s, %s, %s, %s::jsonb)
-                    ON CONFLICT (source_chunk, target_chunk, relationship_type) 
-                    DO UPDATE SET metadata = EXCLUDED.metadata
-                """,
-                    (
-                        chunk_id,
-                        target_info["chunk_id"],
-                        rel_type,
-                        json.dumps(
-                            {
-                                "field": key,
-                                "source_path": chunk.get("path"),
-                                "target_path": target_info["path"],
-                                "target_value": val,
-                            }
-                        ),
-                    ),
+        # Store the chunk with its embedding - PostgreSQL only
+        if is_postgres:
+            embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
+            cur.execute(
+                """
+                INSERT INTO json_chunks (
+                    id, chunk_json, embedding, metadata,
+                    path, file_path
                 )
-            else:
-                logger.debug(f"No chunk found with ID value: {val}")
+                VALUES (%s, %s::jsonb, %s::vector, %s::jsonb, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    chunk_json = EXCLUDED.chunk_json,
+                    embedding = EXCLUDED.embedding,
+                    metadata = EXCLUDED.metadata,
+                    path = EXCLUDED.path,
+                    file_path = EXCLUDED.file_path
+            """,
+                (
+                    chunk_id,
+                    json.dumps(chunk),  # chunk_json
+                    embedding_str,  # embedding
+                    json.dumps(chunk_metadata),  # metadata
+                    chunk.get("path", ""),  # path
+                    f,  # file_path
+                ),
+            )
+
+    # For ChromaDB, we need to batch insert all chunks with their embeddings
+    if not is_postgres:
+        from app.storage.chroma import upsert_chunks
+        
+        # Prepare data for batch insertion
+        chunks_to_insert = []
+        embeddings_to_insert = []
+        
+        for i, (f, chunk) in enumerate(all_chunks):
+            chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
+            embedding = get_embedding(json.dumps(chunk), None).tolist()
+            
+            # Create a document for ChromaDB with the chunk data and metadata
+            full_chunk = {
+                "id": chunk_id,
+                "content": chunk,
+                "metadata": {
+                    "source_file": f,
+                    "path": chunk.get("path", ""),
+                    "chunk_index": i
+                }
+            }
+            
+            chunks_to_insert.append(full_chunk)
+            embeddings_to_insert.append(embedding)
+        
+        # Batch upsert all chunks to ChromaDB
+        upsert_chunks(store, chunks_to_insert, embeddings_to_insert)
+        logger.info(f"Added {len(chunks_to_insert)} chunks to ChromaDB")
+
+    # Third pass: Create relationships now that all chunks are cached (PostgreSQL only)
+    if is_postgres:
+        logger.info("Creating relationships...")
+
+        # First, build a map of all IDs to their chunks
+        id_to_chunk = {}
+        for i, (f, chunk) in enumerate(all_chunks):
+            chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
+
+            # If this chunk has an ID value, map it
+            if chunk.get("value") and isinstance(chunk.get("value"), str):
+                path_parts = chunk.get("path", "").split(".")
+                if any(part.endswith("id") or part == "id" for part in path_parts):
+                    id_to_chunk[chunk.get("value")] = {
+                        "chunk_id": chunk_id,
+                        "path": chunk.get("path"),
+                        "chunk": chunk,
+                    }
+
+        # Now process relationships using the ID map
+        for i, (f, chunk) in enumerate(all_chunks):
+            chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
+            logger.debug(f"Processing relationships for chunk: {chunk_id}")
+            logger.debug(f"Chunk path: {chunk.get('path')}")
+
+            # Extract relationships from chunk value and context
+            context = chunk.get("context", {})
+
+            # Helper function to extract all ID fields from a dict
+            def extract_ids(obj, prefix=""):
+                """
+                Recursively extract ID fields from nested dictionaries and lists.
+
+                This helper function traverses complex data structures to find and
+                collect ID fields, maintaining the full path context through prefixing.
+                It handles both direct ID fields and nested structures.
+
+                Args:
+                    obj: Object to extract IDs from (dict or list)
+                    prefix: String prefix for nested field names (default: '')
+
+                Returns:
+                    dict: Mapping of ID field paths to their values, where:
+                        - Keys are the full path to the ID field
+                        - Values are the ID values found
+
+                Example:
+                    >>> data = {
+                    ...     'user': {
+                    ...         'id': '123',
+                    ...         'team': {'team_id': 'T456'}
+                    ...     }
+                    ... }
+                    >>> extract_ids(data)
+                    {'user_id': '123', 'user_team_team_id': 'T456'}
+
+                Note:
+                    - Handles both 'id' and '*_id' field patterns
+                    - Maintains path context through nesting
+                    - Processes both objects and arrays
+                """
+                ids = {}
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if isinstance(v, str) and (k.endswith("_id") or k == "id"):
+                            ids[prefix + k if prefix else k] = v
+                        elif isinstance(v, (dict, list)):
+                            ids.update(
+                                extract_ids(v, prefix + k + "_" if prefix else k + "_")
+                            )
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        if isinstance(item, dict):
+                            ids.update(extract_ids(item, prefix))
+                return ids
+
+            # Extract all IDs from context
+            all_ids = extract_ids(context)
+            logger.debug(f"Found IDs in context: {all_ids}")
+
+            # Create relationships for each ID
+            for key, val in all_ids.items():
+                if val in id_to_chunk:
+                    target_info = id_to_chunk[val]
+                    logger.debug(f"Found target chunk for ID {val}: {target_info['path']}")
+
+                    # Determine relationship type based on key
+                    rel_type = "reference"
+                    if key.startswith("shipments_"):
+                        rel_type = "shipment_reference"
+                    elif key.startswith("warehouses_"):
+                        rel_type = "warehouse_reference"
+                    elif key.startswith("products_"):
+                        rel_type = "product_reference"
+                    elif key.startswith("suppliers_"):
+                        rel_type = "supplier_reference"
+
+                    cur.execute(
+                        """
+                        INSERT INTO chunk_relationships 
+                        (source_chunk, target_chunk, relationship_type, metadata)
+                        VALUES (%s, %s, %s, %s::jsonb)
+                        ON CONFLICT (source_chunk, target_chunk, relationship_type) 
+                        DO UPDATE SET metadata = EXCLUDED.metadata
+                    """,
+                        (
+                            chunk_id,
+                            target_info["chunk_id"],
+                            rel_type,
+                            json.dumps(
+                                {
+                                    "field": key,
+                                    "source_path": chunk.get("path"),
+                                    "target_path": target_info["path"],
+                                    "target_value": val,
+                                }
+                            ),
+                        ),
+                    )
+                else:
+                    logger.debug(f"No chunk found with ID value: {val}")
 
     # Update file metadata
-    for f, f_hash, f_mtime in documents:
-        upsert_file_metadata(conn, f, f_hash, f_mtime)
+    if is_postgres:
+        for f, f_hash, f_mtime in documents:
+            upsert_file_metadata(store, f, f_hash, f_mtime)
 
-    conn.commit()
-    cur.close()
+    if is_postgres:
+        store.commit()
+        cur.close()
 
     logger.info("Successfully embedded and indexed new chunks")
     return True
 
 
-def initialize_embeddings(conn):
+def initialize_embeddings(store):
     """
     Initialize vector embeddings for all JSON files in the data directory.
 
@@ -369,7 +417,7 @@ def initialize_embeddings(conn):
         3. Stores embeddings and metadata in the database
 
     Args:
-        conn: PostgreSQL database connection object
+        store: Database backend (PostgreSQL connection or ChromaDB collection)
 
     Example:
         >>> with psycopg2.connect(POSTGRES_CONN_STR) as conn:
@@ -382,10 +430,10 @@ def initialize_embeddings(conn):
         - Existing embeddings are preserved and only new/modified files are processed
     """
     print("Initializing embeddings for all JSON files...")
-    load_and_embed_new_data(conn)
+    load_and_embed_new_data(store)
 
 
-def chat_loop(conn):
+def chat_loop(store):
     """
     Run the main interactive chat loop for processing user queries.
 
@@ -401,7 +449,7 @@ def chat_loop(conn):
         - Special command support (:quit)
 
     Args:
-        conn: PostgreSQL database connection object
+        store: Database backend (PostgreSQL connection or ChromaDB collection)
 
     Commands:
         :quit - Exits the chat loop
@@ -425,10 +473,10 @@ def chat_loop(conn):
             print("Exiting chat.")
             break
 
-        load_and_embed_new_data(conn)
+        load_and_embed_new_data(store)
 
         try:
-            answer = answer_query(conn, user_input)
+            answer = answer_query(store, user_input)
             print("Assistant:", answer)
         except Exception as e:
             print("Error processing query:", str(e))
