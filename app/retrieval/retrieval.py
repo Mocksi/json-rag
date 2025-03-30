@@ -1,16 +1,9 @@
-from typing import List, Dict, Optional, Tuple, Union
+from typing import List, Dict, Optional
 import json
-from collections import defaultdict
-import statistics
-from datetime import timedelta
 from openai import OpenAI
-from time import sleep
-from datetime import datetime
 
-from app.core.config import embedding_model
 from app.utils.logging_config import get_logger
-from app.retrieval.embedding import get_embedding, get_base_chunks
-from app.storage.database import get_chunk_relationships, get_chunk_archetypes
+from app.retrieval.embedding import get_base_chunks
 from app.analysis.archetype import ArchetypeDetector
 
 logger = get_logger(__name__)
@@ -18,9 +11,10 @@ logger = get_logger(__name__)
 # Initialize OpenAI client
 client = OpenAI()
 
+
 class QueryPipeline:
     """Unified pipeline for consistent query processing."""
-    
+
     def __init__(self, conn, llm_client):
         self.conn = conn
         self.llm = llm_client
@@ -32,30 +26,29 @@ class QueryPipeline:
         try:
             # Step 1: Analysis
             analysis = self.analyze_query(query)
-            
+
             # Step 2: Retrieval
             results = self.retriever.get_data(query, analysis)
-            
+
             # Step 3: Generate Response
             response = self.generate_response(query, results, analysis)
-            
-            return {
-                "status": "success",
-                "response": response
-            }
-            
+
+            return {"status": "success", "response": response}
+
         except Exception as e:
             self.logger.error(f"Pipeline error: {e}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            return {"status": "error", "error": str(e)}
 
     def analyze_query(self, query: str) -> Dict:
         """Analyze query to determine needs."""
         messages = [
-            {"role": "system", "content": "You analyze queries into structured execution plans."},
-            {"role": "user", "content": f"""Analyze this query and output a structured plan.
+            {
+                "role": "system",
+                "content": "You analyze queries into structured execution plans.",
+            },
+            {
+                "role": "user",
+                "content": f"""Analyze this query and output a structured plan.
             Query: {query}
             
             Output JSON with:
@@ -77,15 +70,14 @@ class QueryPipeline:
                 }},
                 "output_format": "text"
             }}
-            """}
+            """,
+            },
         ]
-        
+
         completion = self.llm.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.0
+            model="o3-mini-2025-01-31", messages=messages
         )
-        
+
         return json.loads(completion.choices[0].message.content)
 
     def generate_response(self, query: str, results: List[Dict], analysis: Dict) -> str:
@@ -94,11 +86,16 @@ class QueryPipeline:
         formatted_data = []
         for result in results:
             if result.get("type") == "summary":
-                formatted_data.extend([{
-                    "date": group["date"],
-                    "count": group["count"],
-                    "data": group["chunks"]
-                } for group in result.get("groups", [])])
+                formatted_data.extend(
+                    [
+                        {
+                            "date": group["date"],
+                            "count": group["count"],
+                            "data": group["chunks"],
+                        }
+                        for group in result.get("groups", [])
+                    ]
+                )
             else:
                 formatted_data.append(result)
 
@@ -114,7 +111,9 @@ class QueryPipeline:
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""Generate a response for this query using the provided data.
+            {
+                "role": "user",
+                "content": f"""Generate a response for this query using the provided data.
             
 Query: {query}
 
@@ -126,48 +125,52 @@ Analysis:
 
 Guidelines:
 - Use only information from the provided data
-- Format according to {analysis.get('output_format', 'text')}
+- Format according to {analysis.get("output_format", "text")}
 - Be clear and concise
 - If aggregating values, show the calculation
 - For temporal comparisons, use the temporal context from the analysis
 - Consider timezone and locale when comparing timestamps
-"""}
+""",
+            },
         ]
-        
+
         completion = self.llm.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.0
+            model="gpt-3.5-turbo", messages=messages, temperature=0.0
         )
-        
+
         return completion.choices[0].message.content.strip()
+
 
 class TwoTierRetrieval:
     """Two-tier retrieval system for large JSON datasets."""
-    
+
     def __init__(self, conn):
         self.conn = conn
         self.logger = get_logger(__name__)
+        self.max_chunks = 3  # Limit number of chunks
+        self.max_relationships = 3  # Limit number of relationships per chunk
 
     def get_data(self, query: str, analysis: Dict) -> List[Dict]:
         """Multi-step retrieval process with focused context building."""
         try:
-            self.logger.debug(f"Starting retrieval with analysis: {json.dumps(analysis, indent=2)}")
-            
+            self.logger.debug(
+                f"Starting retrieval with analysis: {json.dumps(analysis, indent=2)}"
+            )
+
             # Step 1: Get initial chunks with high relevance
             results = get_base_chunks(
                 self.conn,
                 query,
                 filters=analysis.get("filters", {}),
-                limit=5  # Start with fewer chunks
+                limit=self.max_chunks,  # Use max_chunks limit
             )
-            
+
             if not results:
                 return []
 
             # Step 2: Analyze initial results to determine what additional context we need
             needed_context = self._analyze_context_needs(results, analysis)
-            
+
             # Step 3: Build focused context for each result
             enriched_results = []
             with self.conn.cursor() as cur:
@@ -175,74 +178,88 @@ class TwoTierRetrieval:
                     context = self._build_focused_context(cur, chunk, needed_context)
                     if context:
                         enriched_results.append(context)
-            
+
             return enriched_results
-            
+
         except Exception as e:
             self.logger.error(f"Retrieval error: {e}", exc_info=True)
             return []
 
-    def _analyze_context_needs(self, initial_results: List[Dict], analysis: Dict) -> Dict:
+    def _analyze_context_needs(
+        self, initial_results: List[Dict], analysis: Dict
+    ) -> Dict:
         """Determine what additional context we need based on initial results."""
         needs = {
             "entity_ids": set(),
             "time_range": {"start": None, "end": None},
-            "relationship_types": set()
+            "relationship_types": set(),
         }
-        
+
         for chunk in initial_results:
             # Track unique entities
             entity_id = chunk["metadata"].get("entity_id")
             if entity_id:
                 needs["entity_ids"].add(entity_id)
-            
+
             # Track time range if temporal relationships matter
             if analysis.get("relationships", {}).get("temporal"):
                 timestamp = chunk["metadata"].get("timestamp")
                 if timestamp:
-                    if not needs["time_range"]["start"] or timestamp < needs["time_range"]["start"]:
+                    if (
+                        not needs["time_range"]["start"]
+                        or timestamp < needs["time_range"]["start"]
+                    ):
                         needs["time_range"]["start"] = timestamp
-                    if not needs["time_range"]["end"] or timestamp > needs["time_range"]["end"]:
+                    if (
+                        not needs["time_range"]["end"]
+                        or timestamp > needs["time_range"]["end"]
+                    ):
                         needs["time_range"]["end"] = timestamp
-            
+
             # Track relationship types
             for rel in chunk.get("relationships", []):
                 needs["relationship_types"].add(rel["type"])
-        
+
         return needs
 
-    def _build_focused_context(self, cur, chunk: Dict, needed_context: Dict) -> Optional[Dict]:
+    def _build_focused_context(
+        self, cur, chunk: Dict, needed_context: Dict
+    ) -> Optional[Dict]:
         """Build focused context for a chunk based on analysis of what's needed."""
         try:
-            # Initialize archetype detector
-            detector = ArchetypeDetector()
-            
-            # Get archetypes and relationships
-            archetypes = detector.detect_archetypes(chunk["chunk_json"])
-            relationships = detector.detect_relationships(chunk["chunk_json"])
-            
-            # Build focused query conditions
-            conditions = []
+            # Get archetypes for the chunk
+            archetypes = ArchetypeDetector().detect_archetypes(chunk["chunk_json"])
+
+            # Get relationships for the chunk
+            relationships = []
+            cur.execute(
+                """
+                SELECT relationship_type, target_chunk, metadata
+                FROM chunk_relationships
+                WHERE source_chunk = %s
+                ORDER BY metadata->>'confidence' DESC
+                LIMIT %s
+                """,
+                (chunk["id"], self.max_relationships),
+            )
+            for rel in cur.fetchall():
+                relationships.append({
+                    "type": rel[0],
+                    "target": rel[1],
+                    "metadata": rel[2],
+                })
+
+            # Build where clause for related chunks
+            where_clause = "1=1"
             params = []
-            
-            # Only get related chunks that share relevant entities
-            if chunk["metadata"].get("entity_id") in needed_context["entity_ids"]:
-                conditions.append("c.metadata->>'entity_id' = %s")
-                params.append(chunk["metadata"]["entity_id"])
-            
-            # Only get chunks within relevant time range if needed
-            if needed_context["time_range"]["start"]:
-                conditions.append("c.metadata->>'timestamp' >= %s")
-                params.append(needed_context["time_range"]["start"])
-            if needed_context["time_range"]["end"]:
-                conditions.append("c.metadata->>'timestamp' <= %s")
-                params.append(needed_context["time_range"]["end"])
-            
-            # Build WHERE clause
-            where_clause = " AND ".join(conditions) if conditions else "TRUE"
-            
+            if needed_context.get("temporal"):
+                where_clause += " AND metadata->>'type' = 'temporal'"
+            if needed_context.get("entity"):
+                where_clause += " AND metadata->>'type' = 'entity'"
+
             # Get focused set of related chunks
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 WITH RECURSIVE chunk_tree AS (
                     SELECT 
                         c.id,
@@ -252,7 +269,7 @@ class TwoTierRetrieval:
                         1 as tree_depth,
                         ARRAY[c.id] as path
                     FROM json_chunks c
-                    LEFT JOIN chunk_relationships r ON r.target_chunk_id = c.id
+                    LEFT JOIN chunk_relationships r ON r.target_chunk = c.id
                     WHERE {where_clause}
                     AND c.id != %s  -- Exclude self
                     
@@ -266,8 +283,8 @@ class TwoTierRetrieval:
                         t.tree_depth + 1,
                         t.path || c.id
                     FROM chunk_tree t
-                    JOIN chunk_relationships r ON r.source_chunk_id = t.id
-                    JOIN json_chunks c ON c.id = r.target_chunk_id
+                    JOIN chunk_relationships r ON r.source_chunk = t.id
+                    JOIN json_chunks c ON c.id = r.target_chunk
                     WHERE t.tree_depth < 2  -- Reduce depth
                     AND NOT c.id = ANY(t.path)
                 )
@@ -279,18 +296,20 @@ class TwoTierRetrieval:
                     metadata
                 FROM chunk_tree
                 ORDER BY id, tree_depth
-                LIMIT 5  -- Reduce related chunks
-            """, params + [chunk["id"]])
-            
+                LIMIT %s  -- Limit related chunks
+            """,
+                params + [chunk["id"], self.max_chunks],
+            )
+
             related = cur.fetchall()
-            
+
             return {
                 "main_chunk": {
                     "content": chunk["chunk_json"],
                     "type": chunk["metadata"].get("type"),
                     "archetypes": archetypes,
                     "relationships": relationships,
-                    "metadata": chunk["metadata"]
+                    "metadata": chunk["metadata"],
                 },
                 "related_chunks": [
                     {
@@ -298,25 +317,26 @@ class TwoTierRetrieval:
                         "type": r[1],
                         "relationship": r[2],
                         "depth": r[3],
-                        "metadata": r[4]
+                        "metadata": r[4],
                     }
                     for r in related
                 ],
                 "relevance": 1.0 - chunk["distance"],
-                "source": chunk["source_file"]
+                "source": chunk["metadata"].get("file_path", ""),
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error building context: {e}")
             return None
+
 
 def answer_query(conn, query: str) -> str:
     """Answer query using the unified pipeline."""
     pipeline = QueryPipeline(conn, client)
     result = pipeline.execute(query)
-    
+
     if result["status"] == "error":
         logger.error(f"Pipeline error: {result['error']}")
         return "I encountered an error while processing your query. Please try again."
-        
+
     return result["response"]
