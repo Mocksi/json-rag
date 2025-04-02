@@ -63,7 +63,7 @@ def upsert_chunks(collection, chunks: List[Dict[str, Any]], embeddings: List[Lis
         metadatas=metadatas
     )
 
-def query_chunks(collection, query_embedding: List[float], n_results: int = 5) -> List[Dict[str, Any]]:
+def query_chunks(collection, query_embedding: List[float], n_results: int = 5, filter_criteria: Dict = None, exclude_ids: List[str] = None) -> List[Dict[str, Any]]:
     """
     Query chunks using similarity search.
     
@@ -71,19 +71,53 @@ def query_chunks(collection, query_embedding: List[float], n_results: int = 5) -
         collection: ChromaDB collection
         query_embedding: Query embedding vector
         n_results: Number of results to return
+        filter_criteria: Optional filter to apply (metadata filter)
+        exclude_ids: Optional list of IDs to exclude from results
         
     Returns:
         List of chunk dictionaries with their metadata
     """
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n_results
-    )
+    # Convert string query to embedding if needed
+    if isinstance(query_embedding, str):
+        from app.retrieval.embedding import get_embedding
+        query_embedding = get_embedding(query_embedding).tolist()
+    
+    # Prepare query parameters
+    query_params = {
+        "query_embeddings": [query_embedding],
+        "n_results": n_results
+    }
+    
+    # Add filter if provided, properly formatted with operators
+    if filter_criteria:
+        # ChromaDB requires operators like $eq for filtering
+        where_clause = {}
+        
+        # Convert simple key-value pairs to proper ChromaDB filter format
+        for key, value in filter_criteria.items():
+            if key.startswith("metadata."):
+                field_name = key
+            else:
+                # Assume it's a metadata field if not specified
+                field_name = f"metadata.{key}"
+            
+            where_clause[field_name] = {"$eq": value}
+        
+        query_params["where"] = where_clause
+    
+    # Execute the query
+    results = collection.query(**query_params)
     
     chunks = []
     for i in range(len(results["documents"][0])):
+        chunk_id = results["ids"][0][i]
+        
+        # Skip excluded IDs if specified
+        if exclude_ids and chunk_id in exclude_ids:
+            continue
+            
         chunk = {
-            "id": results["ids"][0][i],
+            "id": chunk_id,
             "content": json.loads(results["documents"][0][i]),
             "metadata": results["metadatas"][0][i],
             "distance": results["distances"][0][i]
@@ -109,4 +143,55 @@ def reset_collection(collection):
     Args:
         collection: ChromaDB collection
     """
-    collection.delete(where={}) 
+    collection.delete(where={})
+
+def get_chunks(collection, filter_dict: Dict = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Get chunks by filter criteria without using embeddings.
+    
+    Args:
+        collection: ChromaDB collection
+        filter_dict: Dictionary of filter criteria for metadata fields
+        limit: Maximum number of chunks to return
+        
+    Returns:
+        List of chunk dictionaries with their metadata
+    """
+    try:
+        # Format the where clause properly with operators
+        where_clause = None
+        if filter_dict:
+            # ChromaDB requires operators like $eq for filtering
+            where_clause = {}
+            
+            # Convert simple key-value pairs to proper ChromaDB filter format
+            # For metadata fields, we need to prefix with "metadata."
+            for key, value in filter_dict.items():
+                if key.startswith("metadata."):
+                    field_name = key
+                else:
+                    # Assume it's a metadata field if not specified
+                    field_name = f"metadata.{key}"
+                
+                where_clause[field_name] = {"$eq": value}
+        
+        # Query using properly formatted where clause
+        results = collection.get(
+            where=where_clause,
+            limit=limit
+        )
+        
+        chunks = []
+        if results["ids"]:
+            for i in range(len(results["ids"])):
+                chunk = {
+                    "id": results["ids"][i],
+                    "content": json.loads(results["documents"][i]),
+                    "metadata": results["metadatas"][i]
+                }
+                chunks.append(chunk)
+        
+        return chunks
+    except Exception as e:
+        logger.error(f"Error getting chunks from ChromaDB: {e}")
+        return [] 

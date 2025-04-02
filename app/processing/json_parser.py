@@ -10,6 +10,8 @@ and relationships.
 from typing import List, Dict, Tuple
 import hashlib
 import json
+import orjson
+import ijson
 from pathlib import Path
 from app.utils.logging_config import get_logger
 from collections import defaultdict
@@ -122,36 +124,42 @@ def is_entity_like(obj: Dict) -> bool:
         f"Checking object with {field_count} fields, nested={nested_count}, size={content_size}"
     )
 
-    # Too few fields might be too granular (changed from 3 to 2)
-    if field_count < 2:
-        logger.debug("Too few fields to be a coherent unit")
+    # Allow slightly more fields and nesting
+    max_fields = 7 # Increased from 5
+    max_nested = 3 # Increased from 2
+    min_fields = 2 # Keep at 2
+    max_content = 1200 # Increased from 800
+
+    # Too few fields might be too granular
+    if field_count < min_fields:
+        logger.debug(f"Too few fields (<{min_fields}) to be a coherent unit")
         return False
 
-    # Too many direct fields suggests this might be too large (changed from 7 to 5)
-    if field_count > 5:
-        logger.debug("Too many fields to be a coherent unit")
+    # Too many direct fields suggests this might be too large
+    if field_count > max_fields:
+        logger.debug(f"Too many fields (>{max_fields}) to be a coherent unit")
         return False
 
     # Too many nested structures make this too complex
-    if nested_count > 2:
-        logger.debug("Too many nested structures")
+    if nested_count > max_nested:
+        logger.debug(f"Too many nested structures (>{max_nested})")
         return False
 
     # Content size too large
-    if content_size > 800:
-        logger.debug("Content size too large")
+    if content_size > max_content:
+        logger.debug(f"Content size too large (>{max_content})")
         return False
 
-    # If it has nested structures but also has 2-5 direct fields,
+    # If it has nested structures but also fits within field limits,
     # it might be a good unit
-    if has_nested and 2 <= field_count <= 5:
-        logger.debug("Good size with some nested structure")
+    if has_nested and min_fields <= field_count <= max_fields:
+        logger.debug(f"Good size ({min_fields}-{max_fields} fields) with some nested structure (<= {max_nested})")
         return True
 
-    # If it has no nested structures but has 2-5 fields,
+    # If it has no nested structures but fits within field limits,
     # it's likely a good unit
-    if not has_nested and 2 <= field_count <= 5:
-        logger.debug("Good size with flat structure")
+    if not has_nested and min_fields <= field_count <= max_fields:
+        logger.debug(f"Good size ({min_fields}-{max_fields} fields) with flat structure")
         return True
 
     logger.debug("Does not meet criteria for a coherent unit")
@@ -161,10 +169,11 @@ def is_entity_like(obj: Dict) -> bool:
 def json_to_path_chunks(
     json_obj: Dict,
     file_path: str = "",
-    max_chunks: int = 100,
+    max_chunks: int = 10000,
     entities: Dict = None,
     archetypes: List[Tuple[str, float]] = None,
     chunk_strategy: str = "hybrid",
+    base_path: str = "",
 ) -> List[Dict]:
     """
     Convert a JSON object into path-based chunks, with a configurable strategy.
@@ -176,6 +185,7 @@ def json_to_path_chunks(
         entities (dict): (Optional) Additional entity detection config
         archetypes (List[Tuple[str, float]]): (Optional) Archetype info
         chunk_strategy (str): 'full' (old behavior) or 'hybrid' (less granular)
+        base_path (str): Optional base path to prefix generated chunk paths
     """
     chunks = []
     logger.debug(
@@ -186,28 +196,34 @@ def json_to_path_chunks(
         if context is None:
             context = {}
 
+        # Construct the full path including the base path
+        full_path = f"{base_path}{path}" if base_path else path
+        full_parent_path = f"{base_path}{parent_path}" if base_path and parent_path else parent_path
+        full_parent_path = full_parent_path if full_parent_path is not None else base_path # Handle root case
+
         if len(chunks) >= max_chunks:
-            logger.warning(f"Reached max chunks limit ({max_chunks})")
+            if len(chunks) == max_chunks: # Log only once
+                 logger.warning(f"Reached max chunks limit ({max_chunks}) for {file_path} (base: {base_path})")
             return
 
         if isinstance(obj, dict):
-            # Check if this is an entity-like object we should keep together
-            logger.debug(f"=== Checking if object at path '{path}' is entity-like ===")
-            logger.debug(f"Object keys: {list(obj.keys())}")
+            # logger.debug(f"=== Checking if object at path '{full_path}' is entity-like ===")
+            # logger.debug(f"Object keys: {list(obj.keys())}")
 
             if chunk_strategy == "hybrid" and is_entity_like(obj):
-                logger.debug(f"=== FOUND ENTITY-LIKE OBJECT at path: {path} ===")
+                # logger.debug(f"=== FOUND ENTITY-LIKE OBJECT at path: {full_path} ===")
                 chunk = {
-                    "path": path,
+                    "path": full_path,
                     "value": obj,
                     "context": context,
-                    "parent_path": parent_path,
+                    "parent_path": full_parent_path,
                     "metadata": {
                         "has_children": any(
                             isinstance(v, (dict, list)) for v in obj.values()
                         ),
                         "chunked_as_entity": True,
                         "field_count": len(obj),
+                        "file_path": file_path # Add file path to metadata
                     },
                 }
                 if entities:
@@ -215,32 +231,31 @@ def json_to_path_chunks(
                 if archetypes:
                     chunk["archetypes"] = archetypes
                 chunks.append(chunk)
-                return  # Stop recursion - entire object is one chunk
+                return
 
-            logger.debug(
-                f"=== Object at path '{path}' was NOT entity-like, processing fields individually ==="
-            )
+            # logger.debug(
+            #     f"=== Object at path '{full_path}' was NOT entity-like, processing fields individually ==="
+            # )
 
-            # Process as normal dictionary if not entity-like or using full strategy
             has_any_children = False
             for k, v in obj.items():
                 child_path = f"{path}.{k}" if path else k
                 new_context = {**context}
-                # Add current object's fields to context
                 for ck, cv in obj.items():
                     if not isinstance(cv, (dict, list)):
-                        new_context[f"{path}_{ck}" if path else ck] = cv
+                         # Prefix context keys as well
+                        context_key_prefix = f"{path}_" if path else ""
+                        new_context[f"{context_key_prefix}{ck}"] = cv
                 process_value(v, child_path, path, new_context)
                 has_any_children = True
 
-            # Create chunk for empty dict
             if not has_any_children:
                 chunk = {
-                    "path": path,
-                    "value": obj,
+                    "path": full_path,
+                    "value": obj, # Empty dict
                     "context": context,
-                    "parent_path": parent_path,
-                    "metadata": {"has_children": False},
+                    "parent_path": full_parent_path,
+                    "metadata": {"has_children": False, "file_path": file_path},
                 }
                 if entities:
                     chunk["entities"] = entities
@@ -249,28 +264,29 @@ def json_to_path_chunks(
                 chunks.append(chunk)
 
         elif isinstance(obj, list):
-            logger.debug(f"=== Processing list at path '{path}' ===")
-            # Handle arrays of objects - check each object in the array
+            # logger.debug(f"=== Processing list at path '{full_path}' ===")
             if obj and all(isinstance(item, dict) for item in obj):
-                logger.debug(
-                    "=== List contains all dict items, checking if they are entity-like ==="
-                )
-                # If any object in the array is entity-like, treat each object as a chunk
+                # logger.debug(
+                #     "=== List contains all dict items, checking if they are entity-like ==="
+                # )
                 if any(is_entity_like(item) for item in obj):
-                    logger.debug(
-                        f"=== FOUND ARRAY OF ENTITY-LIKE OBJECTS at path: {path} ==="
-                    )
+                    # logger.debug(
+                    #     f"=== FOUND ARRAY OF ENTITY-LIKE OBJECTS at path: {full_path} ==="
+                    # )
                     for i, item in enumerate(obj):
+                        item_path = f"{path}[{i}]"
+                        full_item_path = f"{base_path}{item_path}"
                         chunk = {
-                            "path": f"{path}[{i}]",
+                            "path": full_item_path,
                             "value": item,
                             "context": context,
-                            "parent_path": parent_path,
+                            "parent_path": full_path, # The list path is the parent
                             "metadata": {
                                 "is_collection_item": True,
-                                "collection_path": path,
+                                "collection_path": full_path,
                                 "item_index": i,
                                 "chunked_as_entity": True,
+                                "file_path": file_path
                             },
                         }
                         if entities:
@@ -278,24 +294,22 @@ def json_to_path_chunks(
                         if archetypes:
                             chunk["archetypes"] = archetypes
                         chunks.append(chunk)
-                    return  # Stop recursion - each object is its own chunk
+                    return
 
-                logger.debug(
-                    "=== List items were NOT entity-like, processing individually ==="
-                )
+                # logger.debug(
+                #     "=== List items were NOT entity-like, processing individually ==="
+                # )
 
-            # Process list items individually if not entity-like objects
             for i, item in enumerate(obj):
-                new_path = f"{path}[{i}]"
-                process_value(item, new_path, path, context)
+                item_path = f"{path}[{i}]"
+                process_value(item, item_path, path, context)
         else:
-            # Only create chunks for primitive values if they're not part of an entity
             chunk = {
-                "path": path,
+                "path": full_path,
                 "value": obj,
                 "context": context,
-                "parent_path": parent_path,
-                "metadata": {"is_primitive": True, "value_type": type(obj).__name__},
+                "parent_path": full_parent_path,
+                "metadata": {"is_primitive": True, "value_type": type(obj).__name__, "file_path": file_path},
             }
             if entities:
                 chunk["entities"] = entities
@@ -303,8 +317,8 @@ def json_to_path_chunks(
                 chunk["archetypes"] = archetypes
             chunks.append(chunk)
 
-    process_value(json_obj)
-    logger.debug(f"Generated {len(chunks)} chunks")
+    process_value(json_obj, path=base_path) # Start with base_path if provided
+    logger.debug(f"Generated {len(chunks)} chunks for {file_path} (base: {base_path})")
 
     # Log chunk statistics
     path_depths = [len(c["path"].split(".")) for c in chunks]
@@ -318,26 +332,68 @@ def json_to_path_chunks(
         value_types[type(c["value"]).__name__] += 1
     logger.debug(f"Value type distribution: {dict(value_types)}")
 
-    return chunks[:max_chunks]
+    return chunks # Return all chunks, limit applied within recursion
 
 
 def process_json_files(directory: str) -> List[Dict]:
-    """Process all JSON files in directory."""
+    """Process all JSON files in directory, streaming items from the 'metrics' array."""
     all_chunks = []
+    logger.info(f"Starting JSON processing in directory: {directory}")
 
     # Walk through directory
     for root, _, files in os.walk(directory):
         for file in files:
-            # Skip test queries file
-            if file == "test_queries":
+            # Skip non-JSON files or specific files
+            if not file.endswith(".json") or file == "test_queries":
                 continue
 
-            if file.endswith(".json"):
-                file_path = os.path.join(root, file)
-                with open(file_path) as f:
-                    data = json.load(f)
-                    all_chunks.extend(json_to_path_chunks(data, str(file_path)))
+            file_path = Path(root) / file
+            logger.info(f"Processing file: {file_path}")
 
+            try:
+                # Assume the structure is { "metrics": [...] } and stream items from the array
+                logger.info(f"Attempting to stream items from 'metrics' array in {file_path}")
+                processed_items = 0
+                with open(file_path, 'rb') as f:
+                    # Use ijson.items to iterate over elements in the 'metrics' array
+                    items = ijson.items(f, 'metrics.item') # Target the array under the 'metrics' key
+                    for i, item in enumerate(items):
+                        item_base_path = f'metrics[{i}]' # Construct base path like metrics[0], metrics[1]
+                        try:
+                            item_chunks = json_to_path_chunks(
+                                item,
+                                file_path=str(file_path),
+                                base_path=item_base_path
+                            )
+                            all_chunks.extend(item_chunks)
+                            processed_items += 1
+                        except Exception as item_e: # Catch errors during chunking of a single item
+                            logger.error(f"Error chunking item {i} (path: {item_base_path}) in {file_path}: {item_e}")
+                            # Optionally continue to the next item
+                            continue
+                logger.info(f"Finished streaming {processed_items} items from {file_path}")
+
+            except ijson.JSONError as e:
+                # Handle cases where the structure might not be { "metrics": [...] } 
+                # or other ijson parsing errors.
+                # Log the specific ijson error message
+                logger.error(f"ijson.JSONError processing {file_path}: {e}. Falling back to full load.") 
+                logger.info(f"Falling back to full object load for {file_path}")
+                try:
+                    with open(file_path, 'rb') as f_obj:
+                        data = orjson.loads(f_obj.read())
+                    # Call json_to_path_chunks for the entire object
+                    object_chunks = json_to_path_chunks(data, file_path=str(file_path), base_path="") 
+                    all_chunks.extend(object_chunks)
+                    logger.info(f"Finished fallback full object load for {file_path}")
+                except Exception as fallback_e:
+                     logger.error(f"Error during fallback load for {file_path}: {fallback_e}")
+            except FileNotFoundError:
+                logger.error(f"File not found: {file_path}")
+            except Exception as e:
+                logger.error(f"An unexpected error occurred processing {file_path}: {e}", exc_info=True)
+
+    logger.info(f"Finished processing all files. Total chunks generated: {len(all_chunks)}")
     return all_chunks
 
 

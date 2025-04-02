@@ -23,8 +23,11 @@ The module integrates with various components including:
 from typing import List, Dict
 import json
 import argparse
+from tqdm import tqdm
+import logging
+import os
 
-from app.processing.json_parser import json_to_path_chunks
+from app.processing.json_parser import json_to_path_chunks, generate_chunk_id
 from app.retrieval.embedding import get_embedding
 from app.analysis.archetype import ArchetypeDetector
 from app.storage.database import (
@@ -35,10 +38,22 @@ from app.storage.database import (
 from app.utils.utils import get_json_files, compute_file_hash
 from app.retrieval.retrieval import answer_query
 from app.core.config import embedding_model
-from app.processing.json_parser import generate_chunk_id
 from app.utils.logging_config import get_logger
+from app.processing.json_processor import process_json_files
+from app.query_intent import analyze_query_intent
+from app.llm_integration import get_llm_response
+from dotenv import load_dotenv
 
-logger = get_logger(__name__)
+# Load environment variables
+load_dotenv()
+POSTGRES_CONN_STR = os.getenv("POSTGRES_CONN_STR")
+JSON_DATA_DIR = os.getenv("JSON_DATA_DIR", "data/json_docs")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 def serialize_for_debug(obj):
@@ -76,36 +91,13 @@ def serialize_for_debug(obj):
 
 def load_and_embed_new_data(store):
     """
-    Load and embed new or modified JSON files into the vector database.
+    Load, chunk, embed, and store data from JSON files in the JSON_DATA_DIR.
 
-    This function performs a multi-pass process to load, chunk, embed,
-    and index JSON files that have been added or modified since the last run.
-    It handles the complete pipeline from file processing to relationship
-    detection.
-
-    Process Flow:
-        1. File Detection:
-            - Identifies new/modified JSON files
-            - Computes file hashes for change detection
-
-        2. Chunking (First Pass):
-            - Processes each JSON file into chunks
-            - Generates metadata for each chunk
-            - Collects all chunks for batch processing
-
-        3. Embedding Generation:
-            - Creates vector embeddings for all chunks
-            - Uses batch processing for efficiency
-
-        4. Storage (Second Pass):
-            - Stores chunks in database
-            - Caches chunks for relationship detection
-            - Detects and stores archetypes
-
-        5. Relationship Detection (Third Pass):
-            - Maps relationships between chunks
-            - Creates bidirectional references
-            - Stores relationship metadata
+    This function uses `process_json_files` to handle the processing of all
+    JSON files found in the specified directory. It leverages streaming for
+    large files and handles embedding and storage (PostgreSQL or ChromaDB).
+    For PostgreSQL, it subsequently performs relationship detection based on
+    the processed chunks.
 
     Args:
         store: Database connection (PostgreSQL) or collection (ChromaDB)
@@ -113,293 +105,180 @@ def load_and_embed_new_data(store):
     Returns:
         bool: True if processing completed successfully
 
-    Example:
-        >>> with psycopg2.connect(POSTGRES_CONN_STR) as conn:
-        ...     success = load_and_embed_new_data(conn)
-        >>> print("Processing complete" if success else "Processing failed")
-
     Note:
-        - Uses transaction to ensure data consistency
-        - Handles errors gracefully for individual files
-        - Maintains file metadata for incremental updates
+        - This function processes *all* JSON files in the directory on each run.
+        - Relationship detection is currently only implemented for PostgreSQL.
     """
-    print("\nChecking for new data to embed...")
-    
+    print("\nProcessing JSON files for embedding...")
+    logger.info("Starting data loading and embedding process.")
+
     # Determine if we're using PostgreSQL or ChromaDB
     is_postgres = hasattr(store, 'cursor')
-    
+
+    # Use process_json_files to handle scanning, chunking, embedding, and storage
+    json_data_dir = os.getenv("JSON_DATA_DIR", "data/json_docs")
+    try:
+        # process_json_files returns processed chunks needed for relationship detection
+        processed_chunks = process_json_files(json_data_dir, store)
+    except Exception as e:
+        logger.error(f"Error during process_json_files: {e}", exc_info=True)
+        return False
+
+    if not processed_chunks:
+        logger.info("No chunks were processed or returned.")
+        # Depending on whether process_json_files returns empty on success or failure,
+        # we might want to return True here if it means no *new* data was found.
+        # Assuming for now it means nothing was done or an error occurred upstream.
+        return True # Let's assume empty list means no new data processed successfully.
+
+    logger.info(f"Successfully processed {len(processed_chunks)} chunks via process_json_files.")
+
+    # Third pass (Relationship Detection - PostgreSQL only)
+    # Adapt this section to use the structure of `processed_chunks`
     if is_postgres:
-        # Get list of files that need processing using PostgreSQL
-        documents = get_files_to_process(store, compute_file_hash, get_json_files)
-    else:
-        # For ChromaDB, we'll just process all JSON files
-        from glob import glob
-        import os
-        json_files = glob(os.path.join(os.getenv("JSON_DATA_DIR", "data/json_docs"), "**/*.json"), recursive=True)
-        documents = [(f, compute_file_hash(f), os.path.getmtime(f)) for f in json_files]
-
-    if not documents:
-        logger.info("No new or modified files to process.")
-        return True
-
-    logger.info(f"Found {len(documents)} files to process")
-
-    # Process each file
-    all_chunks = []
-    detector = ArchetypeDetector()
-    chunk_cache = {}  # Cache to store chunks by ID
-
-    # First pass: Process all files and collect chunks
-    for f, f_hash, f_mtime in documents:
-        logger.info(f"Processing {f}")
-
+        logger.info("Starting Relationship Detection (PostgreSQL)...")
+        cur = None
         try:
-            with open(f, "r") as file:
-                data = json.load(file)
-        except Exception as e:
-            logger.error(f"Error loading file {f}: {e}")
-            continue
+            cur = store.cursor()
 
-        # Generate chunks with metadata
-        doc_chunks = json_to_path_chunks(data, f)
-        all_chunks.extend((f, chunk) for chunk in doc_chunks)
+            # Build a map of all potential ID values to their chunk details
+            # Assumes processed_chunks is a list of dicts like:
+            # {'id': chunk_id, 'content': original_chunk_dict, 'metadata': {'path': '...', 'source_file': '...'}}
+            id_to_chunk_map = {}
+            for chunk_data in processed_chunks:
+                chunk_content = chunk_data.get('content', {})
+                chunk_metadata = chunk_data.get('metadata', {})
+                chunk_id = chunk_data.get('id')
+                chunk_path = chunk_metadata.get('path')
 
-    if not all_chunks:
-        print("No chunks to embed from new files.")
-        return True
+                # Check if the chunk's value looks like an ID field
+                # This logic might need refinement based on how 'value' is structured in chunks
+                value = chunk_content.get('value')
+                if isinstance(value, str) and value: # Check if value is a non-empty string
+                    # Check if the path suggests this is an ID field
+                    path_parts = chunk_path.split('.') if chunk_path else []
+                    if any(part.endswith("id") or part == "id" for part in path_parts):
+                         # Map the ID value (value) to the chunk's details
+                        id_to_chunk_map[value] = {
+                            "chunk_id": chunk_id,
+                            "path": chunk_path,
+                            # Keep the original chunk content if needed, but minimize memory?
+                            # "chunk": chunk_content
+                        }
 
-    logger.info(f"Generated {len(all_chunks)} chunks")
-    logger.info("Generating embeddings...")
+            logger.info(f"Built ID map with {len(id_to_chunk_map)} potential reference targets.")
 
-    # Generate embeddings in batches
-    chunk_texts = [json.dumps(c[1]) for c in all_chunks]  # Serialize chunk data
-    embedding_model.encode(chunk_texts, show_progress_bar=True)
-    
-    # Second pass: Store all chunks and build cache
-    logger.info("Storing chunks and building cache...")
-    
-    # Initialize cursor for PostgreSQL
-    cur = None
-    if is_postgres:
-        cur = store.cursor()
-    for i, (f, chunk) in enumerate(all_chunks):
-        # Generate proper chunk ID using our new system
-        chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
-        chunk_cache[chunk_id] = chunk  # Cache the chunk
+            # Now process relationships using the ID map
+            rels_created = 0
+            for chunk_data in tqdm(processed_chunks, desc="Detecting Relationships"):
+                source_chunk_id = chunk_data.get('id')
+                chunk_content = chunk_data.get('content', {})
+                chunk_metadata = chunk_data.get('metadata', {})
+                source_chunk_path = chunk_metadata.get('path')
 
-        # Detect archetypes
-        chunk_archetypes = detector.detect_archetypes(chunk)
-        logger.debug(f"Processing chunk {chunk_id}")
-        logger.debug(f"Chunk path: {chunk.get('path')}")
+                # Extract potential relationship IDs from chunk context
+                context = chunk_content.get("context", {})
 
-        # Get archetype for embedding
-        archetype = None
-        if chunk_archetypes:
-            archetype = {
-                "type": chunk_archetypes[0][0],
-                "confidence": chunk_archetypes[0][1],
-            }
+                # --- Re-integrate extract_ids helper function ---
+                def extract_ids(obj, prefix=""):
+                    ids = {}
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            # Check if the value is a string and the key looks like an ID
+                            if isinstance(v, str) and v and (k.endswith("_id") or k == "id"):
+                                ids[prefix + k if prefix else k] = v
+                            # Recurse into nested dicts or lists
+                            elif isinstance(v, (dict, list)):
+                                ids.update(
+                                    extract_ids(v, prefix + k + "_" if prefix else k + "_")
+                                )
+                    elif isinstance(obj, list):
+                        for i, item in enumerate(obj):
+                             # Only recurse into dicts within lists for structure
+                            if isinstance(item, dict):
+                                # Pass prefix as is, list index isn't usually part of the semantic key path
+                                ids.update(extract_ids(item, prefix))
+                            # Could potentially handle lists of simple IDs here if needed
+                    return ids
+                # --- End of extract_ids ---
 
-        # Generate embedding with archetype context
-        embedding_list = get_embedding(json.dumps(chunk), archetype).tolist()
-        
-        chunk_metadata = {
-            "archetypes": [{"type": a[0], "confidence": a[1]} for a in chunk_archetypes]
-            if chunk_archetypes
-            else [],
-            "source_file": f,
-            "chunk_index": i,
-        }
+                # Extract all potential IDs from the chunk's context
+                potential_target_ids = extract_ids(context)
+                # Also consider the chunk's own value if it represents an ID link itself
+                # Example: a simple string chunk that is a foreign key
+                value = chunk_content.get('value')
+                path = chunk_metadata.get('path', '')
+                if isinstance(value, str) and value and (path.endswith("_id") or path.endswith(".id")):
+                     potential_target_ids[path.split('.')[-1]] = value # Use field name as key
 
-        # Store the chunk with its embedding - PostgreSQL only
-        if is_postgres:
-            embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
-            cur.execute(
-                """
-                INSERT INTO json_chunks (
-                    id, chunk_json, embedding, metadata,
-                    path, file_path
-                )
-                VALUES (%s, %s::jsonb, %s::vector, %s::jsonb, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET
-                    chunk_json = EXCLUDED.chunk_json,
-                    embedding = EXCLUDED.embedding,
-                    metadata = EXCLUDED.metadata,
-                    path = EXCLUDED.path,
-                    file_path = EXCLUDED.file_path
-            """,
-                (
-                    chunk_id,
-                    json.dumps(chunk),  # chunk_json
-                    embedding_str,  # embedding
-                    json.dumps(chunk_metadata),  # metadata
-                    chunk.get("path", ""),  # path
-                    f,  # file_path
-                ),
-            )
+                # logger.debug(f"Chunk {source_chunk_id}: Found potential target IDs in context/value: {potential_target_ids}")
 
-    # For ChromaDB, we need to batch insert all chunks with their embeddings
-    if not is_postgres:
-        from app.storage.chroma import upsert_chunks
-        
-        # Prepare data for batch insertion
-        chunks_to_insert = []
-        embeddings_to_insert = []
-        
-        for i, (f, chunk) in enumerate(all_chunks):
-            chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
-            embedding = get_embedding(json.dumps(chunk), None).tolist()
-            
-            # Create a document for ChromaDB with the chunk data and metadata
-            full_chunk = {
-                "id": chunk_id,
-                "content": chunk,
-                "metadata": {
-                    "source_file": f,
-                    "path": chunk.get("path", ""),
-                    "chunk_index": i
-                }
-            }
-            
-            chunks_to_insert.append(full_chunk)
-            embeddings_to_insert.append(embedding)
-        
-        # Batch upsert all chunks to ChromaDB
-        upsert_chunks(store, chunks_to_insert, embeddings_to_insert)
-        logger.info(f"Added {len(chunks_to_insert)} chunks to ChromaDB")
+                # Create relationships for each found ID that maps to a known chunk
+                for field_key, target_id_value in potential_target_ids.items():
+                    if target_id_value in id_to_chunk_map:
+                        target_info = id_to_chunk_map[target_id_value]
+                        target_chunk_id = target_info["chunk_id"]
+                        target_chunk_path = target_info["path"]
 
-    # Third pass: Create relationships now that all chunks are cached (PostgreSQL only)
-    if is_postgres:
-        logger.info("Creating relationships...")
+                        # Avoid self-references unless meaningful
+                        if source_chunk_id == target_chunk_id:
+                            continue
 
-        # First, build a map of all IDs to their chunks
-        id_to_chunk = {}
-        for i, (f, chunk) in enumerate(all_chunks):
-            chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
+                        # logger.debug(f"Found target chunk for ID {target_id_value}: {target_chunk_path} (Chunk ID: {target_chunk_id})")
 
-            # If this chunk has an ID value, map it
-            if chunk.get("value") and isinstance(chunk.get("value"), str):
-                path_parts = chunk.get("path", "").split(".")
-                if any(part.endswith("id") or part == "id" for part in path_parts):
-                    id_to_chunk[chunk.get("value")] = {
-                        "chunk_id": chunk_id,
-                        "path": chunk.get("path"),
-                        "chunk": chunk,
-                    }
+                        # Determine relationship type based on key (simple example)
+                        # This can be made more sophisticated
+                        rel_type = "reference"
+                        if field_key.startswith("shipments"): rel_type = "shipment_reference"
+                        elif field_key.startswith("warehouses"): rel_type = "warehouse_reference"
+                        elif field_key.startswith("products"): rel_type = "product_reference"
+                        elif field_key.startswith("suppliers"): rel_type = "supplier_reference"
+                        elif field_key.endswith("_id"): rel_type = f"{field_key[:-3]}_reference"
+                        elif field_key == "id": rel_type = "identity_reference" # Or primary key reference
 
-        # Now process relationships using the ID map
-        for i, (f, chunk) in enumerate(all_chunks):
-            chunk_id = generate_chunk_id(f, chunk.get("path", f"chunk_{i}"))
-            logger.debug(f"Processing relationships for chunk: {chunk_id}")
-            logger.debug(f"Chunk path: {chunk.get('path')}")
 
-            # Extract relationships from chunk value and context
-            context = chunk.get("context", {})
+                        rel_metadata = {
+                            "field": field_key,          # The key/field in the source chunk holding the ID
+                            "source_path": source_chunk_path,
+                            "target_path": target_chunk_path,
+                            "target_value": target_id_value # The actual ID value that linked them
+                        }
 
-            # Helper function to extract all ID fields from a dict
-            def extract_ids(obj, prefix=""):
-                """
-                Recursively extract ID fields from nested dictionaries and lists.
-
-                This helper function traverses complex data structures to find and
-                collect ID fields, maintaining the full path context through prefixing.
-                It handles both direct ID fields and nested structures.
-
-                Args:
-                    obj: Object to extract IDs from (dict or list)
-                    prefix: String prefix for nested field names (default: '')
-
-                Returns:
-                    dict: Mapping of ID field paths to their values, where:
-                        - Keys are the full path to the ID field
-                        - Values are the ID values found
-
-                Example:
-                    >>> data = {
-                    ...     'user': {
-                    ...         'id': '123',
-                    ...         'team': {'team_id': 'T456'}
-                    ...     }
-                    ... }
-                    >>> extract_ids(data)
-                    {'user_id': '123', 'user_team_team_id': 'T456'}
-
-                Note:
-                    - Handles both 'id' and '*_id' field patterns
-                    - Maintains path context through nesting
-                    - Processes both objects and arrays
-                """
-                ids = {}
-                if isinstance(obj, dict):
-                    for k, v in obj.items():
-                        if isinstance(v, str) and (k.endswith("_id") or k == "id"):
-                            ids[prefix + k if prefix else k] = v
-                        elif isinstance(v, (dict, list)):
-                            ids.update(
-                                extract_ids(v, prefix + k + "_" if prefix else k + "_")
-                            )
-                elif isinstance(obj, list):
-                    for i, item in enumerate(obj):
-                        if isinstance(item, dict):
-                            ids.update(extract_ids(item, prefix))
-                return ids
-
-            # Extract all IDs from context
-            all_ids = extract_ids(context)
-            logger.debug(f"Found IDs in context: {all_ids}")
-
-            # Create relationships for each ID
-            for key, val in all_ids.items():
-                if val in id_to_chunk:
-                    target_info = id_to_chunk[val]
-                    logger.debug(f"Found target chunk for ID {val}: {target_info['path']}")
-
-                    # Determine relationship type based on key
-                    rel_type = "reference"
-                    if key.startswith("shipments_"):
-                        rel_type = "shipment_reference"
-                    elif key.startswith("warehouses_"):
-                        rel_type = "warehouse_reference"
-                    elif key.startswith("products_"):
-                        rel_type = "product_reference"
-                    elif key.startswith("suppliers_"):
-                        rel_type = "supplier_reference"
-
-                    cur.execute(
-                        """
-                        INSERT INTO chunk_relationships 
-                        (source_chunk, target_chunk, relationship_type, metadata)
-                        VALUES (%s, %s, %s, %s::jsonb)
-                        ON CONFLICT (source_chunk, target_chunk, relationship_type) 
-                        DO UPDATE SET metadata = EXCLUDED.metadata
-                    """,
-                        (
-                            chunk_id,
-                            target_info["chunk_id"],
-                            rel_type,
-                            json.dumps(
-                                {
-                                    "field": key,
-                                    "source_path": chunk.get("path"),
-                                    "target_path": target_info["path"],
-                                    "target_value": val,
-                                }
+                        # Insert relationship into the database
+                        cur.execute(
+                            """
+                            INSERT INTO chunk_relationships
+                            (source_chunk, target_chunk, relationship_type, metadata)
+                            VALUES (%s, %s, %s, %s::jsonb)
+                            ON CONFLICT (source_chunk, target_chunk, relationship_type)
+                            DO UPDATE SET metadata = EXCLUDED.metadata
+                        """,
+                            (
+                                source_chunk_id,
+                                target_chunk_id,
+                                rel_type,
+                                json.dumps(rel_metadata),
                             ),
-                        ),
-                    )
-                else:
-                    logger.debug(f"No chunk found with ID value: {val}")
+                        )
+                        rels_created += 1
+                    # else:
+                        # logger.debug(f"No chunk found with ID value: {target_id_value} (from field {field_key})")
 
-    # Update file metadata
-    if is_postgres:
-        for f, f_hash, f_mtime in documents:
-            upsert_file_metadata(store, f, f_hash, f_mtime)
+            logger.info(f"Finished Relationship Detection. Created/Updated {rels_created} relationships.")
+            store.commit()
 
-    if is_postgres:
-        store.commit()
-        cur.close()
+        except (Exception, psycopg2.DatabaseError) as error:
+            logger.error(f"Error during PostgreSQL relationship processing: {error}", exc_info=True)
+            if store:
+                store.rollback() # Rollback on error
+            return False # Indicate failure
+        finally:
+            if cur:
+                cur.close()
 
-    logger.info("Successfully embedded and indexed new chunks")
+    # Removed file metadata update logic - process_json_files might handle this internally or it's deferred.
+
+    logger.info("Successfully finished loading and embedding process.")
     return True
 
 
@@ -695,6 +574,109 @@ def run_test_queries(conn) -> None:
         logger.error("Test queries file not found at data/json_docs/test_queries")
     except Exception as e:
         logger.error(f"Error running test queries: {e}")
+
+
+def get_relevant_chunks(store, query, query_intent=None, max_chunks=10):
+    """
+    Get the most relevant chunks for a query, using advanced retrieval when appropriate.
+    
+    Args:
+        store: Database backend (PostgreSQL or ChromaDB)
+        query: User query string
+        query_intent: Optional intent analysis results
+        max_chunks: Maximum number of chunks to return
+        
+    Returns:
+        List of relevant chunks with metadata
+    """
+    # Check if the query appears to be about advertising metrics
+    use_advanced_retrieval = False
+    
+    # Check query for ad metrics related terms
+    ad_metrics_terms = ['ad', 'ads', 'advertising', 'campaign', 'impression', 'click', 'conversion', 
+                         'ctr', 'cpm', 'cpc', 'adMetrics', 'metrics']
+    
+    query_lower = query.lower()
+    if any(term in query_lower for term in ad_metrics_terms):
+        use_advanced_retrieval = True
+        logger.info("Query appears to be about ad metrics, using advanced retrieval")
+    
+    # Check intent if available
+    if query_intent and isinstance(query_intent, dict):
+        entities = query_intent.get('entities', [])
+        topics = query_intent.get('topics', [])
+        
+        # Check for ad-related entities or topics
+        for item in entities + topics:
+            if isinstance(item, str) and any(term in item.lower() for term in ad_metrics_terms):
+                use_advanced_retrieval = True
+                break
+    
+    # Use advanced retrieval if available and appropriate
+    if use_advanced_retrieval:
+        try:
+            from app.retrieval.advanced_retrieval import retrieve_from_hierarchical_chunks
+            chunks = retrieve_from_hierarchical_chunks(store, query, top_k=max_chunks)
+            
+            if chunks:
+                logger.info(f"Retrieved {len(chunks)} chunks using advanced retrieval")
+                return chunks
+            else:
+                logger.info("Advanced retrieval returned no results, falling back to standard")
+                # Fall through to standard retrieval
+        except ImportError:
+            logger.info("Advanced retrieval module not available, using standard retrieval")
+            # Fall through to standard retrieval
+    
+    # Use standard retrieval
+    is_postgres = hasattr(store, 'cursor')
+    
+    if is_postgres:
+        # PostgreSQL retrieval
+        from app.retrieval.postgres import get_relevant_chunks as postgres_retrieval
+        return postgres_retrieval(store, query, max_chunks)
+    else:
+        # ChromaDB retrieval
+        from app.retrieval.chroma import search_chunks
+        return search_chunks(store, query, max_chunks)
+
+
+def answer_query(store, query: str) -> str:
+    """
+    Process a user query and return an answer based on the JSON embeddings.
+    
+    This function:
+    1. Analyzes the query intent
+    2. Retrieves relevant chunks using vector search
+    3. Builds a prompt with context for the LLM
+    4. Gets response from LLM and returns it
+    
+    Args:
+        store: Database connection
+        query: User's question
+        
+    Returns:
+        str: Response to the query based on relevant JSON data
+    """
+    # First, analyze intent to better understand what the user is asking
+    intent = analyze_query_intent(query)
+    logger.debug(f"Query intent: {intent}")
+    
+    # Retrieve relevant chunks, using our function that selects
+    # between standard and advanced retrieval as appropriate
+    chunks = get_relevant_chunks(store, query, intent)
+    
+    if not chunks:
+        return "I couldn't find any relevant information in the database. Could you rephrase your question?"
+    
+    # Build prompt with context from chunks
+    context = assemble_context(chunks)
+    prompt = build_prompt(query, context, intent)
+    
+    # Get response from LLM
+    answer = get_llm_response(prompt)
+    
+    return answer
 
 
 def main():

@@ -1,0 +1,284 @@
+{
+    "metrics": [
+        {
+            "ad_id": "120216121528650588",
+            "ad_name": "Lifestyle | BLxAvocado Feb 2025 Full and Mini Mattress | Carousel | Products | SKU1_M53102A | SKU2_M53103A | Other Page | Ad Copy_Description",
+            "ad_created_time": "2025-01-30T15:07:44-0800",
+            "creative_id": "617063467592191",
+            "content_type": "image_content",
+            "image_url": "https://www.facebook.com/ads/image/?d=AQLj99bo0ar1Be76MQA8JzMjvRwuWZHifUH0WrgbR8e2rb8d1X4zePvB8CtbGVWORw3ztYxRZ8Jz7zJv4iSB5TTAhHzmXJ-G7iunXdTHjfpb_hrEH9oh_AENXV7vsBtT2N1_3bF3N5krxERAxmNTeXO9",
+            "imprs": 42833,
+            "visits": 582,
+            "spend": 677.4700039999999,
+            "attributed_rev": 1848.1238452042376,
+            "ctr": 0.013587654378633296,
+            "roas": 2.727978854107669,
+            "traits": [
+                {
+                    "trait_id": "00c8a426-cff2-49c3-a094-9337d097f655",
+                    "trait_name": "Commercial Style",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "8c5619f6-338b-4ae8-bbdc-709c46451603"
+                },
+                {
+                    "trait_id": "37c0bd99-a98e-4436-a537-591b56de05e3",
+                    "trait_name": "Product without people",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "7af09cc8-50e2-4d54-bad5-9f640db77604"
+                },
+                {
+                    "trait_id": "91b0baf7-03aa-4ae3-827e-ff7383695264",
+                    "trait_name": "Minimalist/clean layout",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "55c72dc8-44e0-4615-a419-d9702c601ad4"
+                },
+                {
+                    "trait_id": "a1aaffa7-164c-4b60-9571-70e03a7a8bba",
+                    "trait_name": "Product alone",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "21e14f8b-1468-4138-b66f-9314ad31b028"
+                },
+                {
+                    "trait_id": "a1b27d4d-7771-4abf-9fdc-114018038f01",
+                    "trait_name": "Single dominant color",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "a97f7452-7005-4ba8-bcc6-ed4cf162ae46"
+                },
+                {
+                    "trait_id": "bb785a82-f693-4698-9f58-67335b6d968f",
+                    "trait_name": "Emojis",
+                    "trait_type": "text",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "0244225f-305d-40fe-84f6-36c80966bf7e"
+                }
+            ]
+        },
+        {
+            "ad_id": "120210901513320588",
+            "ad_name": "Lifestyle | BL Claims June 2024_Clout 5 Stars_In 100K Nurseries Kiwi Recliner ATLB | Single Image | Products | SKU1_M11288ATLB | Product Page | Ad Copy_Description",
+            "ad_created_time": "2024-06-13T13:16:14-0700",
+            "creative_id": "120211247702700588",
+            "content_type": "image_content",
+            "image_url": "https://www.facebook.com/ads/image/?d=AQKZWpMt5kZlRxmak0OKqdDvGLvLgJCvRutt2uIB7YUYVDLkGFdYNLlJJIKT-qOHNE_LIB8_NZCmbiDOOEgaAQytZV_Rln2vBNZHO68pOwOis_0JUeEjS3XG0_ZosbHTL_2nSPvL-tJNvIzQD6dtfWf2",
+            "imprs": 0,
+            "visits": 1,
+            "spend": 0,
+            "attributed_rev": 1.172142747115097,
+            "ctr": 0,
+            "roas": 0,
+            "traits": [
+                {
+                    "trait_id": "00c8a426-cff2-49c3-a094-9337d097f655",
+                    "trait_name": "Commercial Style",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "8c5619f6-338b-4ae8-bbdc-709c46451603"
+                },
+                {
+                    "trait_id": "06bdfa88-1780-4219-ac05-e3438ab1aa44",
+                    "trait_name": "Intimate/Warm Imagery",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "6a41ac7c-aa26-4289-bbb6-48b283e52550"
+                },
+                {
+                    "trait_id": "0bd8c1e4-93de-496c-9522-e7cde18159ba",
+                    "trait_name": "Data/Stats",
+                    "trait_type": "text",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "a38e2fe4-532d-4f9d-b514-b569e5ff2e0f"
+                },
+                {
+                    "trait_id": "18897ee0-d852-4104-a8a6-7d7080bb68e3",
+                    "trait_name": "Tribe/Community",
+                    "trait_type": "text",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "e7cacdca-221f-4988-b068-42b933fb552a"
+                },
+                {
+                    "trait_id": "37c0bd99-a98e-4436-a537-591b56de05e3",
+                    "trait_name": "Product without people",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "7af09cc8-50e2-4d54-bad5-9f640db77604"
+                },
+                {
+                    "trait_id": "3f36db40-8aec-49d6-9cad-596e0f13a0c1",
+                    "trait_name": "Trustworthy Imagery",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "6cc4516f-b7dc-4009-a82e-06e01fe9bf36"
+                },
+                {
+                    "trait_id": "4465e276-0d99-425e-934d-f1b59a882fd5",
+                    "trait_name": "Empowering Imagery",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "fae7e4c3-6705-405d-b6e2-7527c12a5c19"
+                },
+                {
+                    "trait_id": "5019f6d4-42f5-4d4c-801f-285c621c7ee4",
+                    "trait_name": "Single product",
+                    "trait_type": "text",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "452cf5e4-73c9-450a-b9f8-294b12e7cb48"
+                },
+                {
+                    "trait_id": "747a319b-ec92-4040-9628-3d73ac4c10d3",
+                    "trait_name": "Artistic Style",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "8428b07c-0138-465c-af18-45f9d2ba6a7c"
+                },
+                {
+                    "trait_id": "91b0baf7-03aa-4ae3-827e-ff7383695264",
+                    "trait_name": "Minimalist/clean layout",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "55c72dc8-44e0-4615-a419-d9702c601ad4"
+                },
+                {
+                    "trait_id": "a1aaffa7-164c-4b60-9571-70e03a7a8bba",
+                    "trait_name": "Product alone",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "21e14f8b-1468-4138-b66f-9314ad31b028"
+                },
+                {
+                    "trait_id": "a1b27d4d-7771-4abf-9fdc-114018038f01",
+                    "trait_name": "Single dominant color",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "a97f7452-7005-4ba8-bcc6-ed4cf162ae46"
+                },
+                {
+                    "trait_id": "b1284afc-0896-4574-87ee-179ba3d0274a",
+                    "trait_name": "Social proof",
+                    "trait_type": "text",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "b1731fa0-5525-419d-874c-6db672e8eacc"
+                },
+                {
+                    "trait_id": "e2bf1a50-e4f5-48f9-9522-da10cb163317",
+                    "trait_name": "Calm/Serene Imagery",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "2dbb46dd-ffef-4d5e-be81-815578e06508"
+                }
+            ]
+        },
+        {
+            "ad_id": "120218360622140588",
+            "ad_name": "UGC | @adutakech | BL Pogo All-Stages Oct 2024 AD feature Pogo Crib | Single Image | Products | SKU1_M29880BD | Product Page | Ad Copy_Description",
+            "ad_created_time": "2025-03-03T18:18:39-0800",
+            "creative_id": "2170972786652454",
+            "content_type": "image_content",
+            "image_url": "https://www.facebook.com/ads/image/?d=AQJI4PYcAZ7X5sMAb6hRvee5qQtidNZ2g99sbjD29AuE4f1aY8FWCo37bJBm93CiafRZOdBn5PKq2pdOl9CxNPWrmvsyrUMT0kc9HU4za-xYjl19WMv5fnZRIRTG5shAFyr6grBhm0lxq3UbMB1bYYQg",
+            "imprs": 601,
+            "visits": 9,
+            "spend": 12.440000000000001,
+            "attributed_rev": 21.515890712780955,
+            "ctr": 0.014975041597337771,
+            "roas": 1.729573208422906,
+            "traits": [
+                {
+                    "trait_id": "00c8a426-cff2-49c3-a094-9337d097f655",
+                    "trait_name": "Commercial Style",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "8c5619f6-338b-4ae8-bbdc-709c46451603"
+                },
+                {
+                    "trait_id": "37c0bd99-a98e-4436-a537-591b56de05e3",
+                    "trait_name": "Product without people",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "7af09cc8-50e2-4d54-bad5-9f640db77604"
+                },
+                {
+                    "trait_id": "3f36db40-8aec-49d6-9cad-596e0f13a0c1",
+                    "trait_name": "Trustworthy Imagery",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "6cc4516f-b7dc-4009-a82e-06e01fe9bf36"
+                },
+                {
+                    "trait_id": "747a319b-ec92-4040-9628-3d73ac4c10d3",
+                    "trait_name": "Artistic Style",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "8428b07c-0138-465c-af18-45f9d2ba6a7c"
+                },
+                {
+                    "trait_id": "91b0baf7-03aa-4ae3-827e-ff7383695264",
+                    "trait_name": "Minimalist/clean layout",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "55c72dc8-44e0-4615-a419-d9702c601ad4"
+                },
+                {
+                    "trait_id": "a1b27d4d-7771-4abf-9fdc-114018038f01",
+                    "trait_name": "Single dominant color",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "a97f7452-7005-4ba8-bcc6-ed4cf162ae46"
+                },
+                {
+                    "trait_id": "b1284afc-0896-4574-87ee-179ba3d0274a",
+                    "trait_name": "Social proof",
+                    "trait_type": "text",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "b1731fa0-5525-419d-874c-6db672e8eacc"
+                },
+                {
+                    "trait_id": "b27122df-a066-4d0f-9529-b9af7f457592",
+                    "trait_name": "Product in group",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "c77f83d4-330a-40bf-a508-a1be80a550ca"
+                },
+                {
+                    "trait_id": "e2bf1a50-e4f5-48f9-9522-da10cb163317",
+                    "trait_name": "Calm/Serene Imagery",
+                    "trait_type": "image",
+                    "content_type": "image_content",
+                    "trait_set_id": "3498758a-d0ab-487e-8d8a-366c0878217e",
+                    "trait_category_id": "2dbb46dd-ffef-4d5e-be81-815578e06508"
+                }
+            ]
+        }
+    ]
+}
