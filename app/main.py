@@ -18,12 +18,9 @@ def main():
     parser = argparse.ArgumentParser(description="JSON RAG System")
     parser.add_argument("--test", action="store_true", help="Run test queries")
     parser.add_argument("--vector-store", choices=["postgres", "chroma"], 
-                       default="postgres",  # Force postgres as default
+                       default=os.getenv("VECTOR_STORE", "postgres"),
                        help="Vector store to use (postgres or chroma)")
     args = parser.parse_args()
-
-    # Force using PostgreSQL regardless of environment variable
-    args.vector_store = "postgres"
     
     try:
         # Initialize vector store based on selection

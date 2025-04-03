@@ -31,9 +31,9 @@ def estimate_token_count(text: str) -> int:
     Returns:
         int: Estimated token count
     """
-    # More conservative estimation - 1 token ~= 3.5 chars for English text with JSON
-    # This helps prevent underestimation
-    return int(len(text) / 3.5)
+    # Even more conservative estimation - 1 token ~= 3 chars for English text with JSON
+    # This helps prevent severe underestimation with structured data
+    return int(len(text) / 3)
 
 def truncate_text_to_token_limit(text: str, max_tokens: int) -> str:
     """
@@ -192,9 +192,9 @@ def chunk_context(context: str, system_message: str, query: str, max_context_tok
     
     return chunks
 
-def summarize_chunk(chunk: str, query: str, max_summary_tokens: int = 250) -> str:
+def summarize_chunk(chunk: str, query: str, max_summary_tokens: int = 150) -> str:
     """
-    Summarize a chunk of context to reduce token usage.
+    Summarize a chunk of context to reduce token usage while preserving JSON structure.
     
     Args:
         chunk: The chunk of context to summarize
@@ -202,32 +202,184 @@ def summarize_chunk(chunk: str, query: str, max_summary_tokens: int = 250) -> st
         max_summary_tokens: Maximum tokens for the summary
         
     Returns:
-        str: Summarized chunk
+        str: Summarized chunk, preserving JSON structure when possible
     """
     # If chunk is already small, return it as is
     if estimate_token_count(chunk) <= max_summary_tokens:
         return chunk
-        
-    # Create a summarization prompt
-    system_message = "You are an extreme summarization assistant. Create the most concise summary possible that preserves only essential information relevant to the user's query. Focus only on key facts. Use bullet points where possible."
     
-    summarize_prompt = f"""Summarize the following text in at most {max_summary_tokens} tokens, focusing ONLY on information directly relevant to: "{query}"
+    # For JSON content, try to extract and preserve the structure
+    try:
+        # Check if this looks like JSON
+        chunk_trimmed = chunk.strip()
+        if (chunk_trimmed.startswith('{') and chunk_trimmed.endswith('}')) or \
+           (chunk_trimmed.startswith('[') and chunk_trimmed.endswith(']')):
+            import json
+            json_data = json.loads(chunk_trimmed)
+            
+            # If it's a JSON object (dictionary)
+            if isinstance(json_data, dict):
+                # Define important fields to keep based on the query
+                query_lower = query.lower()
+                # Default important fields
+                important_fields = [
+                    "id", "name", "title", "type", "key",
+                    "count", "total", "sum", "value", "amount",
+                    "date", "time", "timestamp",
+                    "description", "summary", "details",
+                ]
+                
+                # Add query-relevant fields
+                query_words = set(query_lower.split())
+                for key in json_data.keys():
+                    key_lower = key.lower()
+                    # If any word in the query appears in the key, consider it important
+                    if any(word in key_lower for word in query_words):
+                        important_fields.append(key)
+                
+                # Create simplified JSON keeping important fields
+                simplified = {}
+                
+                # First pass: add high-priority fields directly mentioned in query
+                for key in json_data:
+                    key_lower = key.lower()
+                    if any(word in key_lower for word in query_words):
+                        simplified[key] = json_data[key]
+                
+                # Second pass: add other important fields if we have space
+                for key in important_fields:
+                    if key in json_data and key not in simplified:
+                        simplified[key] = json_data[key]
+                        # Check if we're still under token limit
+                        if estimate_token_count(json.dumps(simplified)) > max_summary_tokens:
+                            del simplified[key]  # Remove if it pushes us over limit
+                
+                # If simplified version is empty or too small, take a few critical or small fields
+                if len(simplified) < min(3, len(json_data)):
+                    # Try to add id field first
+                    if "id" in json_data and "id" not in simplified:
+                        simplified["id"] = json_data["id"]
+                    
+                    # Add a few small fields
+                    for key, value in json_data.items():
+                        if key not in simplified:
+                            # Only add if it's a simple value (not an object or array)
+                            if isinstance(value, (str, int, float, bool)) or value is None:
+                                simplified[key] = value
+                                # Stop if we're approaching the token limit
+                                if estimate_token_count(json.dumps(simplified)) > max_summary_tokens * 0.8:
+                                    break
+                
+                # Add a _summary field to indicate this is a simplified version
+                simplified["_summary"] = True
+                
+                # Format as JSON with minimal whitespace
+                simplified_json = json.dumps(simplified, ensure_ascii=False, separators=(',', ':'))
+                
+                # If still too large, truncate the JSON with a notice
+                if estimate_token_count(simplified_json) > max_summary_tokens:
+                    simplified = {"_summary": True, "_notice": "JSON object truncated", "id": simplified.get("id")}
+                    # Add as many fields as possible until we hit the limit
+                    for key, value in json_data.items():
+                        if key not in simplified and not isinstance(value, (dict, list)):
+                            simplified[key] = value
+                            if estimate_token_count(json.dumps(simplified, ensure_ascii=False)) > max_summary_tokens * 0.9:
+                                break
+                    simplified_json = json.dumps(simplified, ensure_ascii=False, separators=(',', ':'))
+                
+                return simplified_json
+            
+            # If it's a JSON array
+            elif isinstance(json_data, list):
+                # For arrays, keep a sample of items
+                if len(json_data) > 0:
+                    # If items are dictionaries, summarize each one
+                    if all(isinstance(item, dict) for item in json_data):
+                        simplified_array = []
+                        # Take first few items
+                        sample_size = min(3, len(json_data))
+                        for i in range(sample_size):
+                            item = json_data[i]
+                            # Simplify each item using same approach as above
+                            simple_item = {"_summary": True}
+                            # Add id or first few simple fields
+                            if "id" in item:
+                                simple_item["id"] = item["id"]
+                            # Add a few fields
+                            field_count = 0
+                            for key, value in item.items():
+                                if key not in simple_item and not isinstance(value, (dict, list)):
+                                    simple_item[key] = value
+                                    field_count += 1
+                                    if field_count >= 3:
+                                        break
+                            simplified_array.append(simple_item)
+                        
+                        # Add count of total items
+                        result = {
+                            "_summary": True,
+                            "_array_sample": simplified_array,
+                            "_total_items": len(json_data)
+                        }
+                        
+                        result_json = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
+                        if estimate_token_count(result_json) <= max_summary_tokens:
+                            return result_json
+                    else:
+                        # For simple arrays, just take a sample and indicate total
+                        sample = json_data[:3] if len(json_data) > 3 else json_data
+                        result = {
+                            "_summary": True, 
+                            "_array_sample": sample,
+                            "_total_items": len(json_data)
+                        }
+                        result_json = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
+                        if estimate_token_count(result_json) <= max_summary_tokens:
+                            return result_json
+    except Exception as e:
+        logger.debug(f"JSON summarization failed: {e}")
     
-TEXT TO SUMMARIZE:
+    # If we couldn't use the JSON approach or it failed, use LLM-based summarization
+    system_message = """You are a JSON summarization assistant. Create a structured JSON summary of the provided content.
+    Include ONLY essential information relevant to the query. Preserve the JSON structure when possible.
+    The result should be valid JSON format with keys and values that reflect the most important data."""
+    
+    summarize_prompt = f"""Create a JSON summary (max {max_summary_tokens} tokens) of this content, focusing on information relevant to: "{query}"
+    
+CONTENT:
 {chunk}
 
-EXTREMELY CONCISE SUMMARY (bullet points preferred):"""
+Return ONLY valid JSON as your response, preserving the structure of the original data as much as possible:"""
 
     try:
         # Use a lower temperature for more deterministic summaries
         summary = _get_openai_response(summarize_prompt, system_message, temperature=0.1, max_tokens=max_summary_tokens)
-        return summary
+        
+        # Ensure the result is valid JSON
+        try:
+            # Trim any markdown formatting the model might add
+            if summary.startswith("```json"):
+                summary = summary.split("```json", 1)[1]
+            if summary.startswith("```"):
+                summary = summary.split("```", 1)[1]
+            if summary.endswith("```"):
+                summary = summary.rsplit("```", 1)[0]
+            
+            summary = summary.strip()
+            
+            # Validate JSON
+            json.loads(summary)
+            return summary
+        except:
+            # If not valid JSON, return as-is
+            logger.warning("LLM produced invalid JSON summary")
+            return summary
     except Exception as e:
         logger.error(f"Error summarizing chunk: {e}")
-        # Fall back to basic truncation if summarization fails
+        # Fall back to extreme truncation if summarization fails
         return truncate_text_to_token_limit(chunk, max_summary_tokens)
 
-def apply_map_reduce(context: str, query: str, system_message: str, max_final_context_tokens: int = 3000) -> str:
+def apply_map_reduce(context: str, query: str, system_message: str, max_final_context_tokens: int = 2000) -> str:
     """
     Apply map-reduce pattern to large context:
     1. Split context into chunks
@@ -245,8 +397,35 @@ def apply_map_reduce(context: str, query: str, system_message: str, max_final_co
     """
     logger.info("Applying map-reduce to large context")
     
+    # Check if context is empty
+    if not context or context.isspace():
+        logger.warning("Empty context provided to map-reduce")
+        return "No relevant context information available."
+    
+    # Handle very large contexts by first splitting into major sections
+    estimated_context_tokens = estimate_token_count(context)
+    logger.info(f"Initial context size: ~{estimated_context_tokens} tokens")
+    
+    # For extremely large contexts, do a preliminary chunking and summarization
+    if estimated_context_tokens > 20000:
+        logger.warning(f"Extremely large context ({estimated_context_tokens} tokens), performing preliminary reduction")
+        # Split into very large chunks first
+        prelim_chunks = chunk_context(context, "", query, max_context_tokens=8000)
+        prelim_summaries = []
+        
+        for i, chunk in enumerate(prelim_chunks):
+            # For preliminary chunking, use very aggressive summarization
+            summary = summarize_chunk(chunk, query, max_summary_tokens=300)
+            if summary and not summary.isspace():
+                prelim_summaries.append(summary)
+                
+        # Join the preliminary summaries to create a reduced context
+        context = "\n\n".join(prelim_summaries)
+        estimated_context_tokens = estimate_token_count(context)
+        logger.info(f"After preliminary reduction: ~{estimated_context_tokens} tokens")
+    
     # Split context into manageable chunks
-    context_chunks = chunk_context(context, system_message, query, max_context_tokens=6000)
+    context_chunks = chunk_context(context, system_message, query, max_context_tokens=4000)
     
     if not context_chunks:
         logger.warning("No context chunks extracted.")
@@ -266,6 +445,24 @@ def apply_map_reduce(context: str, query: str, system_message: str, max_final_co
         logger.warning("No valid summaries generated.")
         return "No relevant context information available."
     
+    # For large number of summaries, summarize them in batches
+    if len(summaries) > 10:
+        logger.info(f"Large number of summaries ({len(summaries)}), processing in batches")
+        batch_size = 5
+        batched_summaries = []
+        
+        for i in range(0, len(summaries), batch_size):
+            batch = summaries[i:i+batch_size]
+            batch_text = "\n\n".join(batch)
+            
+            # Summarize this batch
+            batch_summary = summarize_chunk(batch_text, query, max_summary_tokens=250)
+            if batch_summary and not batch_summary.isspace():
+                batched_summaries.append(batch_summary)
+                
+        summaries = batched_summaries
+        logger.info(f"Reduced to {len(summaries)} batch summaries")
+    
     # Reduce phase: Combine summaries
     logger.info("Reduce phase: Combining summaries")
     combined_summaries = "\n\n".join(summaries)
@@ -274,22 +471,45 @@ def apply_map_reduce(context: str, query: str, system_message: str, max_final_co
     if estimate_token_count(combined_summaries) > max_final_context_tokens:
         # Further reduce by creating a summary of summaries
         logger.info("Creating summary of summaries")
-        reduce_system_message = "You are a data distillation expert. Combine these summaries into a MINIMAL context containing ONLY information directly relevant to the user's question. Be ruthlessly concise. Use bullet points."
-        reduce_prompt = f"""The following are summaries of different parts of a document. 
-Create the most concise possible synthesis (max {max_final_context_tokens} tokens) containing ONLY information directly relevant to: "{query}"
+        # For JSON, use a system message that preserves structure
+        reduce_system_message = """You are a JSON synthesis expert. 
+        Create a JSON object that efficiently combines information from multiple JSON sources.
+        The result must be valid JSON that preserves the structure and key relationships from the original data."""
+        
+        reduce_prompt = f"""The following contains JSON information from different sources. 
+Create a SINGLE consolidated JSON object (max {max_final_context_tokens // 2} tokens) that includes key information relevant to: "{query}"
 
-SUMMARIES TO COMBINE:
+JSON SOURCES:
 {combined_summaries}
 
-ULTRA-CONCISE SYNTHESIS:"""
+Return ONLY valid JSON, structured to show the most relevant information:"""
 
         try:
-            final_context = _get_openai_response(reduce_prompt, reduce_system_message, temperature=0.1, max_tokens=max_final_context_tokens)
+            final_context = _get_openai_response(reduce_prompt, reduce_system_message, temperature=0.1, max_tokens=max_final_context_tokens // 2)
+            
+            # Try to clean up and validate JSON
+            try:
+                # Remove any markdown formatting
+                if "```json" in final_context:
+                    final_context = final_context.split("```json", 1)[1]
+                if "```" in final_context:
+                    parts = final_context.split("```")
+                    for part in parts:
+                        if part.strip() and not part.strip().startswith('{') and not part.strip().startswith('['):
+                            continue
+                        final_context = part.strip()
+                        break
+                
+                # Validate JSON
+                json.loads(final_context)
+            except:
+                logger.warning("Reduce phase produced invalid JSON, using as-is")
+            
             return final_context
         except Exception as e:
             logger.error(f"Error in reduce phase: {e}")
             # Fall back to more aggressive truncation if reduce fails
-            return truncate_text_to_token_limit(combined_summaries, max_final_context_tokens // 3)
+            return truncate_text_to_token_limit(combined_summaries, max_final_context_tokens // 4)
     
     return combined_summaries
 
@@ -329,14 +549,14 @@ def get_llm_response(
     
     # Set default system message if none provided
     if not system_message:
-        system_message = "You are a helpful AI assistant focused on answering precisely and concisely. Answer based only on the provided context."
+        system_message = "You are a helpful AI assistant focused on answering precisely and concisely. Answer based only on the provided context. If the context doesn't contain relevant information, say so."
     
     # Try OpenAI first
     if OPENAI_API_KEY:
         try:
             # Check if context is small enough to send as a single message
             total_tokens = estimate_token_count(prompt) + estimate_token_count(system_message) + max_tokens
-            model_max_tokens = 10000  # Even more conservative limit for GPT-3.5-turbo
+            model_max_tokens = 8000  # Even more conservative limit for GPT-3.5-turbo
             
             if total_tokens <= model_max_tokens:
                 # Context fits within token limit, process normally
@@ -362,7 +582,7 @@ def get_llm_response(
                     
                     # Calculate how much we need to reduce by
                     reduction_factor = new_total_tokens / model_max_tokens
-                    reduced_context_tokens = int(estimate_token_count(processed_context) / (reduction_factor * 1.5))  # Extra safety margin
+                    reduced_context_tokens = int(estimate_token_count(processed_context) / (reduction_factor * 2))  # Extra safety margin
                     
                     # Truncate with prioritization of important parts
                     truncated_context = truncate_text_to_token_limit(processed_context, reduced_context_tokens)
