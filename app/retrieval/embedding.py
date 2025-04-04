@@ -188,79 +188,112 @@ def compute_similarity(embedding1, embedding2):
 
 
 def get_base_chunks(
-    conn, query: str, filters: Dict = None, limit: int = 20
+    store, query: str, filters: Dict = None, limit: int = 20
 ) -> List[Dict]:
-    """Get base chunks using semantic search."""
+    """Get base chunks using semantic search.
+    
+    Args:
+        store: Database store (PostgreSQL connection or ChromaDB collection)
+        query: The search query string
+        filters: Optional filters to apply
+        limit: Maximum number of results to return
+        
+    Returns:
+        List of matching chunks with their metadata
+    """
     try:
+        # Determine if we're using PostgreSQL or ChromaDB
+        is_postgres = hasattr(store, 'cursor')
+        
         logger.debug(f"Generating embedding for query: {query}")
         query_embedding = get_embedding(query)
         logger.debug(f"Generated embedding of size {len(query_embedding)}")
-
-        # Build WHERE clause from filters
-        where_conditions = ["embedding IS NOT NULL"]
-
-        # Convert numpy array to list for psycopg2
+        
+        # Convert numpy array to list
         embedding_list = query_embedding.tolist()
-        params = [
-            embedding_list,
-            embedding_list,
-            limit,
-        ]  # Two embeddings for the query, and limit
+        
+        if is_postgres:
+            # PostgreSQL implementation
+            # Build WHERE clause from filters
+            where_conditions = ["embedding IS NOT NULL"]
+            params = [
+                embedding_list,
+                embedding_list,
+                limit,
+            ]  # Two embeddings for the query, and limit
 
-        if filters:
-            logger.debug(f"Applying filters: {json.dumps(filters, indent=2)}")
+            if filters:
+                logger.debug(f"Applying filters: {json.dumps(filters, indent=2)}")
 
-            # Only apply non-temporal filters in SQL
-            if filters.get("type"):
-                # Check if type is an array or a string
-                type_filter = filters["type"]
-                if isinstance(type_filter, list):
-                    if type_filter:  # Only process if the list is non-empty
-                        # Convert all values to strings first to avoid type issues
-                        type_filter = [str(val) for val in type_filter]
-                        # If array, check for any of the values using IN operator
-                        placeholders = ", ".join(["%s"] * len(type_filter))
-                        where_conditions.append(f"metadata->>'type' IN ({placeholders})")
-                        # Add values as parameters
-                        for val in type_filter:
-                            params.insert(-1, val)
-                else:
-                    # Single value comparison
-                    where_conditions.append("metadata->>'type' = %s")
-                    params.insert(-1, str(type_filter))
+                # Only apply non-temporal filters in SQL
+                if filters.get("type"):
+                    # Check if type is an array or a string
+                    type_filter = filters["type"]
+                    if isinstance(type_filter, list):
+                        if type_filter:  # Only process if the list is non-empty
+                            # Convert all values to strings first to avoid type issues
+                            type_filter = [str(val) for val in type_filter]
+                            # If array, check for any of the values using IN operator
+                            placeholders = ", ".join(["%s"] * len(type_filter))
+                            where_conditions.append(f"metadata->>'type' IN ({placeholders})")
+                            # Add values as parameters
+                            for val in type_filter:
+                                params.insert(-1, val)
+                    else:
+                        # Single value comparison
+                        where_conditions.append("metadata->>'type' = %s")
+                        params.insert(-1, str(type_filter))
 
-        where_clause = " AND ".join(where_conditions)
+            where_clause = " AND ".join(where_conditions)
 
-        # Execute query with filters
-        with conn.cursor() as cur:
-            query = f"""
-            SELECT 
-                id,
-                chunk_json,
-                metadata,
-                file_path,
-                embedding <=> %s::vector as distance
-            FROM json_chunks
-            WHERE {where_clause}
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-            """
+            # Execute query with filters
+            with store.cursor() as cur:
+                query = f"""
+                SELECT 
+                    id,
+                    chunk_json,
+                    metadata,
+                    file_path,
+                    embedding <=> %s::vector as distance
+                FROM json_chunks
+                WHERE {where_clause}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """
 
-            logger.debug(f"Executing query: {query}")
-            logger.debug(f"Query params: {params}")
+                logger.debug(f"Executing query: {query}")
+                logger.debug(f"Query params: {params}")
 
-            cur.execute(query, params)
-            results = cur.fetchall()
+                cur.execute(query, params)
+                results = cur.fetchall()
 
+                return [
+                    {
+                        "id": r[0],
+                        "content": r[1],  # Renamed for consistency with ChromaDB
+                        "metadata": r[2],
+                        "source_file": r[3],  # Renamed for consistency
+                        "distance": float(r[4]),
+                    }
+                    for r in results
+                ]
+        else:
+            # ChromaDB implementation
+            from app.storage.chroma import query_chunks
+            
+            # Use ChromaDB's query function
+            results = query_chunks(store, embedding_list, limit)
+            
+            # Convert to the same format as PostgreSQL results
             return [
                 {
-                    "id": r[0],
-                    "chunk_json": r[1],
-                    "metadata": r[2],
-                    "file_path": r[3],
-                    "distance": float(r[4]),
+                    "id": chunk["id"],
+                    "content": chunk["content"],
+                    "metadata": chunk["metadata"],
+                    "source_file": chunk["metadata"].get("source_file", ""),
+                    "distance": chunk.get("distance", 0.0),
                 }
-                for r in results
+                for chunk in results
             ]
 
     except Exception as e:

@@ -11,6 +11,13 @@ A tool for efficiently loading and integrating nested JSON data structures into 
   - State transitions and system conditions
   - Hybrid search combining vector similarity, relationships, and filters
 
+* **Intelligent JSON Chunking**:
+  - Structure-aware chunking preserving JSON hierarchy
+  - Semantic boundary detection for meaningful chunks
+  - Context-retaining chunk sizes optimized for embedding
+  - Overlap control to maintain continuity between chunks
+  - Metadata preservation across chunk boundaries
+
 * **Smart Data Processing**:
   - Automatic entity detection and relationship mapping
   - Cross-file relationship detection and validation
@@ -98,6 +105,12 @@ The codebase is organized into logical modules:
 - **analysis/**: Modules for analyzing data patterns, cross-file relationships, and user intent
 - **core/**: Core system configuration and shared components
 - **processing/**: Data processing and relationship detection modules
+  - The `parsing.py` module implements intelligent chunking:
+    - Recursively analyzes JSON structure to identify natural semantic boundaries
+    - Preserves parent-child relationships during chunking
+    - Maintains context by tracking paths and ancestry for each chunk
+    - Applies size constraints while respecting semantic coherence
+    - Assigns unique IDs and metadata to chunks for relationship tracking
 - **retrieval/**: Relationship-aware search and context assembly
 - **storage/**: Database interaction and relationship persistence
 - **utils/**: Shared utility functions and helpers

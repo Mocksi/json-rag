@@ -15,11 +15,11 @@ client = OpenAI()
 class QueryPipeline:
     """Unified pipeline for consistent query processing."""
 
-    def __init__(self, conn, llm_client):
-        self.conn = conn
+    def __init__(self, store, llm_client):
+        self.store = store
         self.llm = llm_client
         self.logger = get_logger(__name__)
-        self.retriever = TwoTierRetrieval(conn)
+        self.retriever = TwoTierRetrieval(store)
 
     def execute(self, query: str) -> Dict:
         """Execute query through pipeline."""
@@ -144,11 +144,12 @@ Guidelines:
 class TwoTierRetrieval:
     """Two-tier retrieval system for large JSON datasets."""
 
-    def __init__(self, conn):
-        self.conn = conn
+    def __init__(self, store):
+        self.store = store
         self.logger = get_logger(__name__)
         self.max_chunks = 3  # Limit number of chunks
         self.max_relationships = 3  # Limit number of relationships per chunk
+        self.is_postgres = hasattr(store, 'cursor')
 
     def get_data(self, query: str, analysis: Dict) -> List[Dict]:
         """Multi-step retrieval process with focused context building."""
@@ -159,7 +160,7 @@ class TwoTierRetrieval:
 
             # Step 1: Get initial chunks with high relevance
             results = get_base_chunks(
-                self.conn,
+                self.store,
                 query,
                 filters=analysis.get("filters", {}),
                 limit=self.max_chunks,  # Use max_chunks limit
@@ -173,11 +174,26 @@ class TwoTierRetrieval:
 
             # Step 3: Build focused context for each result
             enriched_results = []
-            with self.conn.cursor() as cur:
+            
+            if self.is_postgres:
+                # PostgreSQL approach with cursor
+                with self.store.cursor() as cur:
+                    for chunk in results:
+                        context = self._build_focused_context(cur, chunk, needed_context)
+                        if context:
+                            enriched_results.append(context)
+            else:
+                # ChromaDB approach - simplified context building
                 for chunk in results:
-                    context = self._build_focused_context(cur, chunk, needed_context)
-                    if context:
-                        enriched_results.append(context)
+                    # For ChromaDB, we don't have the same relationship data structure
+                    # So just use the chunk directly with minimal additional context
+                    enriched_results.append({
+                        "id": chunk["id"],
+                        "content": chunk["content"],
+                        "metadata": chunk["metadata"],
+                        "type": "document",
+                        "relationships": [] # No relationships in ChromaDB mode for now
+                    })
 
             return enriched_results
 
@@ -330,9 +346,17 @@ class TwoTierRetrieval:
             return None
 
 
-def answer_query(conn, query: str) -> str:
-    """Answer query using the unified pipeline."""
-    pipeline = QueryPipeline(conn, client)
+def answer_query(store, query: str) -> str:
+    """Answer query using the unified pipeline.
+    
+    Args:
+        store: Database backend (PostgreSQL connection or ChromaDB collection)
+        query: The user's search query
+        
+    Returns:
+        Response text from the AI assistant
+    """
+    pipeline = QueryPipeline(store, client)
     result = pipeline.execute(query)
 
     if result["status"] == "error":
